@@ -3,9 +3,9 @@ import argparse
 MODEL = 'PSPNet'  # PSPNet, DeepLab, RefineNet
 RESTORE_FROM = './pretrained_models/pretrain_pspnet_150000.pth'
 
-BATCH_SIZE = 2
+BATCH_SIZE = 5
 ITER_SIZE = 1
-NUM_WORKERS = 2
+NUM_WORKERS = 5
 
 SET = 'train'
 DATA_DIRECTORY = '/path/to/cityscape'
@@ -13,19 +13,19 @@ DATA_LIST_PATH = './dataset/lists/cityscapes_train.txt'
 INPUT_SIZE = '512'
 DATA_DIRECTORY_TARGET = '/path/to/Dark_Zurich_train_anon/rgb_anon'
 DATA_LIST_PATH_TARGET = './dataset/lists/zurich_dn_pair_train.csv'
-INPUT_SIZE_TARGET = '960'
+INPUT_SIZE_TARGET = '512'
 
 NUM_CLASSES = 19
 IGNORE_LABEL = 255
 
-LEARNING_RATE = 2.5e-4
+LEARNING_RATE = 1e-4
 POWER = 0.9
 MOMENTUM = 0.9
 WEIGHT_DECAY = 0.0005
-LEARNING_RATE_D = 1e-4
+LEARNING_RATE_D = 1e-5
 
 NUM_STEPS = 50000
-SAVE_PRED_EVERY = 1000
+SAVE_PRED_EVERY = 1
 SNAPSHOT_DIR = './snapshots/'+MODEL
 STD = 0.05
 

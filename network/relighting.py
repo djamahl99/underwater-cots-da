@@ -85,6 +85,7 @@ class ResnetGenerator(nn.Module):
         """
         assert(n_blocks >= 0)
         super(ResnetGenerator, self).__init__()
+        self.ngf = ngf
         if type(norm_layer) == functools.partial:
             use_bias = norm_layer.func == nn.InstanceNorm2d
         else:
@@ -125,11 +126,126 @@ class ResnetGenerator(nn.Module):
         """Standard forward"""
         return self.model(input)
 
+class ResnetGeneratorHalf(nn.Module):
+    """Resnet-based generator that consists of Resnet blocks between a few downsampling/upsampling operations.
+
+    We adapt Torch code and idea from Justin Johnson's neural style transfer project(https://github.com/jcjohnson/fast-neural-style)
+    """
+
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6, padding_type='reflect'):
+        """Construct a Resnet-based generator
+
+        Parameters:
+            input_nc (int)      -- the number of channels in input images
+            output_nc (int)     -- the number of channels in output images
+            ngf (int)           -- the number of filters in the last conv layer
+            norm_layer          -- normalization layer
+            use_dropout (bool)  -- if use dropout layers
+            n_blocks (int)      -- the number of ResNet blocks
+            padding_type (str)  -- the name of padding layer in conv layers: reflect | replicate | zero
+        """
+        assert(n_blocks >= 0)
+        super(ResnetGeneratorHalf, self).__init__()
+        self.ngf = ngf
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        model = [nn.ReflectionPad2d(3),
+                 nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0, bias=use_bias),
+                 norm_layer(ngf),
+                 nn.ReLU(True)]
+
+        n_downsampling = 2
+        for i in range(n_downsampling):  # add downsampling layers
+            mult = 2 ** i
+            model += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1, bias=use_bias),
+                      norm_layer(ngf * mult * 2),
+                      nn.ReLU(True)]
+
+        mult = 2 ** n_downsampling
+        for i in range(n_blocks):       # add ResNet blocks
+
+            model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+
+        l = 0
+
+        for i in range(n_downsampling):  # add upsampling layers
+            mult = 2 ** (n_downsampling - i)
+            model += [nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2),
+                                         kernel_size=3, stride=2,
+                                         padding=1, output_padding=1,
+                                         bias=use_bias),
+                      norm_layer(int(ngf * mult / 2)),
+                      nn.ReLU(True)]
+            l = int(ngf * mult / 2)
+            break # ignore last convtranspose2d
+        model += [nn.ReflectionPad2d(3)]
+        model += [nn.Conv2d(l, output_nc, kernel_size=7, padding=0)]
+        model += [nn.Tanh()]
+
+        self.model = nn.Sequential(*model)
+
+    def forward(self, input):
+        """Standard forward"""
+        o = self.model(input)
+
+        return nn.functional.upsample(o, input.shape[-2:])
+
+
+class GammaLightNet(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.unet = ResnetGenerator(3, 1, 64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=3)
+
+    def forward(self, x):
+        o = self.unet(x)
+        # rgb = o[:, :3, :, :]
+        gamma = o[:, 0, :, :].unsqueeze(1)
+
+
+        gamma_correction = torch.pow(x, gamma)
+
+        return gamma_correction - x
 
 def LightNet():
+    # model = ResnetGeneratorHalf(3, 3, 64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=3)
     model = ResnetGenerator(3, 3, 64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=3)
     return model
 
+class L_grayscale(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.loss = nn.MSELoss()
+
+    def forward(self, x, t):
+        r, g, b = x[:, 0], x[:, 1], x[:, 2]
+        L_x = 0.299*r + 0.587*g + 0.114*b
+
+        r, g, b = t[:, 0], t[:, 1], t[:, 2]
+        L_t = 0.299*r + 0.587*g + 0.114*b
+        
+        return self.loss(L_x, L_t)
+
+from .ciconv2d import CIConv2d
+class L_ColorInvarianceConv(nn.Module):
+    def __init__(self, invariant) -> None:
+        super().__init__()
+
+        self.invariant = invariant
+        self.ci_conv = CIConv2d(invariant)
+        self.ci_conv.eval()
+
+        self.loss = nn.MSELoss()
+
+    def forward(self, x, t):
+        x = self.ci_conv(x)
+        t = self.ci_conv(t)
+
+        return self.loss(x, t)
 
 class L_exp_z(nn.Module):
     def __init__(self, patch_size):
@@ -141,6 +257,16 @@ class L_exp_z(nn.Module):
         mean = self.pool(x)
         d = torch.mean(torch.pow(mean - torch.FloatTensor([mean_val]).cuda(), 2))
         return d
+
+class Loss_bounds(nn.Module):
+    def __init__(self) -> None:
+        super(Loss_bounds, self).__init__()
+
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        v =  torch.mean(self.relu(-x) + self.relu(x-1))
+        return v # scale
 
 
 class L_TV(nn.Module):
