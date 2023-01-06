@@ -7,7 +7,7 @@ import torch.optim as optim
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 from dataset.kaggle_aims_pair_dataset import kaggle_aims_pair
-
+import numpy as np
 from network import *
 
 from dataset.zurich_pair_dataset import zurich_pair_DataSet
@@ -56,25 +56,28 @@ def main():
 
     # lightnet = GammaLightNet()
     lightnet = LightNet()
-    saved_state_dict = torch.load("dannet_deeplab_light.pth")
-    lightnet.load_state_dict(saved_state_dict)
+    #saved_state_dict = torch.load("dannet_deeplab_light.pth")
+    saved_state_dict = torch.load("snapshots/wobbly-puddle-108_light_1.pth")
+    #lightnet.load_state_dict(saved_state_dict)
 
     lightnet = nn.DataParallel(lightnet)
+    lightnet.load_state_dict(saved_state_dict)
     lightnet.train()
     lightnet.to(device)
 
     # model_D = FCDiscriminator(num_classes=3) # classes = num input channels
     model_D = YOLODiscriminator()
-    # model_D = ResNet18Discriminator()
+    saved_state_dict = torch.load("snapshots/wobbly-puddle-108_d_1.pth")
     model_D = nn.DataParallel(model_D)
+    model_D.load_state_dict(saved_state_dict)
+    # model_D = ResNet18Discriminator()
+    #model_D = nn.DataParallel(model_D)
     # model_D.backbone.eval()
     model_D.train()
     model_D.to(device)
 
     print(model_D.module)
     assert not model_D.module.backbone.training and model_D.module.classifier.training, f"backbone should not be training {model_D.module.backbone.training}"
-
-    assert not model_D.module.backbone.requires_grad and model_D.module.classifier.requires_grad, "req. grad."
 
     # model = FCDiscriminator(num_classes=3, patched=False, ndf=8)
     # model = nn.DataParallel(model)
@@ -206,8 +209,8 @@ def main():
             loss_enhance_bounds_aims = loss_bounds(enhanced_images_aims) # bounds loss
             loss_ci_aims = loss_ci(enhanced_images_aims, images_aims)
             loss_enhance_aims = 10*loss_TV(r)+torch.mean(loss_SSIM(enhanced_images_aims, images_aims))\
-                 + 5*torch.mean(loss_exp_z(enhanced_images_aims, mean_light)) + loss_ci_aims\
-                    + 10*loss_enhance_bounds_aims
+                 + 5*torch.mean(loss_exp_z(enhanced_images_aims, mean_light)) + 0.1*loss_ci_aims\
+                    + 5*loss_enhance_bounds_aims
 
             # kaggle -> enhanced
             r = lightnet(images_kaggle)
@@ -215,8 +218,8 @@ def main():
             loss_enhance_bounds_kaggle = loss_bounds(enhanced_images_kaggle) # bounds loss
             loss_ci_kaggle = loss_ci(enhanced_images_kaggle, images_kaggle)
             loss_enhance_kaggle = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(enhanced_images_kaggle, images_kaggle))\
-                            + 5*torch.mean(loss_exp_z(enhanced_images_kaggle, mean_light)) + loss_ci_kaggle\
-                                 + 10*loss_enhance_bounds_kaggle
+                            + 5*torch.mean(loss_exp_z(enhanced_images_kaggle, mean_light)) + 0.1*loss_ci_kaggle\
+                                 + 5*loss_enhance_bounds_kaggle
 
             # Discriminator on enhanced kaggle
             D_out_d = model_D(enhanced_images_kaggle)
@@ -253,7 +256,7 @@ def main():
             # loss_classifier = loss_classify_kaggle + loss_classify_aims + loss_classify_aims_enhanced + loss_classify_kaggle_enhanced
             ###########################################################################################
 
-            loss = loss_adv_enhanced_kaggle + loss_adv_enhanced_aims + 10*loss_enhance_aims + 10*loss_enhance_kaggle #+ loss_classifier
+            loss = loss_adv_enhanced_kaggle + loss_adv_enhanced_aims + loss_enhance_aims + loss_enhance_kaggle #+ loss_classifier
             loss = loss / args.iter_size
 
             loss_enhance = loss_enhance_aims.item() + loss_enhance_kaggle.item()
@@ -271,7 +274,15 @@ def main():
             if j == len(trainloader) - 1 or j == 0 or j % 50 == 0:
                 aims_table = wandb.Table(columns=[], data=[])
 
-                log_images = lambda images: [wandb.Image(images[i].permute(1,2,0).detach().cpu().numpy()) for i in range(images.shape[0])]
+                #print_img_stats = lambda image: print("min max", image.min(), image.max())
+
+                def print_img_stats(img):
+
+                    print("min max", img.min(), img.max())
+                    img = np.clip(img, a_min=0, a_max=1)
+                    return img
+
+                log_images = lambda images: [wandb.Image(print_img_stats(images[i].permute(1,2,0).detach().cpu().numpy())) for i in range(images.shape[0])]
 
                 aims_table.add_column("aims", data=log_images(images_aims))
                 aims_table.add_column("enhanced", log_images(enhanced_images_aims))
@@ -304,8 +315,8 @@ def main():
         # if i_iter % args.save_pred_every == 0 and i_iter != 0:
         print('taking snapshot ...')
         # torch.save(model.state_dict(), os.path.join(args.snapshot_dir, 'dannet' + str(i_iter) + '.pth'))
-        torch.save(lightnet.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_light_' + str(i_iter) + '.pth'))
-        torch.save(model_D.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_d_' + str(i_iter) + '.pth'))
+        torch.save(lightnet.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_light_' + "latest" + '.pth'))
+        torch.save(model_D.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_d_' + "latest" + '.pth'))
         # torch.save(model_D2.state_dict(), os.path.join(args.snapshot_dir, 'dannet_d2_' + str(i_iter) + '.pth'))
 
         if not os.path.exists(f"imgs/{wandb.run.name}/"):
