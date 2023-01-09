@@ -20,7 +20,8 @@ import torchvision
 from network.discriminator import ResNet18Discriminator, YOLODiscriminator
 
 from network.relighting import GammaLightNet, L_ColorInvarianceConv, L_grayscale, Loss_bounds
-from network.stn import STN
+
+from network.deeprelight_networks import define_G, VGGLoss
 
 def lr_poly(base_lr, iter, max_iter, power):
     return base_lr * ((1 - float(iter) / max_iter) ** (power))
@@ -50,39 +51,54 @@ def main():
     args = get_arguments()
     # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     device = torch.device("cuda")
+    device2 = torch.device("cuda")
 
     cudnn.enabled = True
     cudnn.benchmark = True
 
-    # lightnet = GammaLightNet()
-    lightnet = LightNet()
+    generator = "lightnet" # lightnet
+    discriminator = "fc" # yolo
+    r_coeff = 1.0
+
+    if generator == "deeprelight":
+        lightnet = define_G(3, 3, 8, 'global') 
+    else:
+        lightnet = LightNet()
     #saved_state_dict = torch.load("dannet_deeplab_light.pth")
-    saved_state_dict = torch.load("snapshots/wobbly-puddle-108_light_1.pth")
+        saved_state_dict = torch.load("snapshots/wobbly-puddle-108_light_1.pth")
     #lightnet.load_state_dict(saved_state_dict)
 
     lightnet = nn.DataParallel(lightnet)
-    lightnet.load_state_dict(saved_state_dict)
+    #if generator == "lightnet":
+    #    lightnet.load_state_dict(saved_state_dict)
     lightnet.train()
     lightnet.to(device)
 
-    # model_D = FCDiscriminator(num_classes=3) # classes = num input channels
-    model_D = YOLODiscriminator()
-    saved_state_dict = torch.load("snapshots/wobbly-puddle-108_d_1.pth")
+    if discriminator == "fc":
+        model_D = FCDiscriminator(num_classes=3) # classes = num input channels
+    else:
+        model_D = YOLODiscriminator()
+    
     model_D = nn.DataParallel(model_D)
-    model_D.load_state_dict(saved_state_dict)
+    
+    if discriminator == "yolo":
+        #model_D.load_state_dict(saved_state_dict)
+        saved_state_dict = torch.load("snapshots/wobbly-puddle-108_d_1.pth")
+        model_D.load_state_dict(saved_state_dict)
     # model_D = ResNet18Discriminator()
     #model_D = nn.DataParallel(model_D)
     # model_D.backbone.eval()
+    
     model_D.train()
-    model_D.to(device)
+    model_D.to(device2)
 
-    print(model_D.module)
-    assert not model_D.module.backbone.training and model_D.module.classifier.training, f"backbone should not be training {model_D.module.backbone.training}"
-
-    # model = FCDiscriminator(num_classes=3, patched=False, ndf=8)
-    # model = nn.DataParallel(model)
-    # model.train()
-    # model.to(device)
+    ###print(model_D.module)
+    
+    # if running classification
+    model = FCDiscriminator(num_classes=3, patched=False, ndf=8)
+    model = nn.DataParallel(model)
+    model.train()
+    model.to(device)
 
     if not os.path.exists(args.snapshot_dir):
         os.makedirs(args.snapshot_dir)
@@ -93,10 +109,10 @@ def main():
     )
     trainloader_iter = enumerate(trainloader)
 
-    optimizer = optim.Adam(list(lightnet.parameters()), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
+    optimizer = optim.Adam(list(lightnet.parameters()) + list(model.parameters()), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
     optimizer.zero_grad()
 
-    optimizer_D = optim.Adam(model_D.module.classifier.parameters(), lr=args.learning_rate_D, betas=(0.9, 0.99))
+    optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9, 0.99))
     optimizer_D.zero_grad()
 
     loss_exp_z = L_exp_z(32)
@@ -106,13 +122,14 @@ def main():
     loss_mse = nn.MSELoss()
     loss_ci = L_ColorInvarianceConv(invariant='W')
     loss_bounds = Loss_bounds()
+    #loss_vgg = VGGLoss()
 
     kaggle_label = 0.0
     aims_label = 1.0
     fake_label = 0.0
     real_label = 1.0
 
-    r_coeff = 1.0
+    #r_coeff = 1.0
 
     wandb.init(
         project="UNet (DANNet) adversarial AIMS -> Kaggle",
@@ -121,11 +138,12 @@ def main():
             lightnet_ngf=lightnet.module.ngf,
             color_invariant=loss_ci.invariant,
             discriminator=model_D.module._get_name(),
-            lightnet=lightnet.module._get_name()
+            lightnet=lightnet.module._get_name(),
+            classifier=model.module._get_name()
         )
     )
 
-    wandb.watch(models=[lightnet, model_D])
+    wandb.watch(models=[lightnet, model_D, model])
 
     for i_iter in range(args.num_steps):
         optimizer.zero_grad()
@@ -134,12 +152,14 @@ def main():
         j = 0
         for images_kaggle, images_aims, labels_kaggle, labels_aims in tqdm(trainloader, desc="Batch"):
             labels_kaggle = labels_kaggle.to(device)
-            labels_aims = labels_aims.to(device)
+            #labels_aims = labels_aims.to(device)
 
             images_aims = images_aims.to(device)
             mean_light = images_kaggle.mean()
             
             images_kaggle = images_kaggle.to(device)
+
+            print("kaggle imgs", images_kaggle.shape,"aims", images_aims.shape)
 
             b_size = images_kaggle.shape[0]
 
@@ -152,22 +172,28 @@ def main():
                 p.requires_grad_(True)
             
             model_D.zero_grad()
-            # model.zero_grad()
+            #model.zero_grad()
 
             # enhance aims images
             r = lightnet(images_aims)
-            enhanced_images_aims = images_aims + r * r_coeff
+            if generator == "lightnet":
+                enhanced_images_aims = images_aims + r * r_coeff
+            else: 
+                enhanced_images_aims = r
             # enhanced_images_aims = torch.clamp(enhanced_images_aims, 0.0, 1.0)
 
             # enhance kaggle images
-            r = lightnet(images_kaggle)
-            enhanced_images_kaggle = images_kaggle + r * r_coeff
+            #r = lightnet(images_kaggle)
+            #if generator == "lightnet":
+            #    enhanced_images_kaggle = images_kaggle + r * r_coeff
+            #else:
+            #    enhanced_images_kaggle = r
             # enhanced_images_kaggle = torch.clamp(enhanced_images_kaggle, 0.0, 1.0)
 
             # D with REAL aims
             D_out_d = model_D(images_aims)
             # D_label_d = torch.tensor([[aims_label]], dtype=torch.float).repeat((b_size, 1)).to(device)
-            D_label_d = torch.FloatTensor(D_out_d.data.size()).fill_(aims_label).to(device) # use kaggle as want lightnet to produce kaggle style
+            D_label_d = torch.FloatTensor(D_out_d.data.size()).fill_(aims_label).to(device2) # use kaggle as want lightnet to produce kaggle style
             loss_adv_real_aims = loss_bce(D_out_d, D_label_d)
 
             # D with enhanced aims
@@ -176,14 +202,14 @@ def main():
 
             # D with REAL kaggle
             D_out_d = model_D(images_kaggle)
-            D_label_d = torch.FloatTensor(D_out_d.data.size()).fill_(kaggle_label).to(device) # use kaggle as want lightnet to produce kaggle style
+            D_label_d = torch.FloatTensor(D_out_d.data.size()).fill_(kaggle_label).to(device2) # use kaggle as want lightnet to produce kaggle style
             loss_adv_real_kaggle = loss_bce(D_out_d, D_label_d)
 
-            # # D with enhanced kaggle (treat as real)
-            D_out_d = model_D(enhanced_images_kaggle)
-            loss_adv_enhanced_kaggle = loss_bce(D_out_d, D_label_d)
+            # D with enhanced kaggle (treat as real) - will make discriminator know about noisy kaggle
+            #D_out_d = model_D(enhanced_images_kaggle)
+            #loss_adv_enhanced_kaggle = loss_bce(D_out_d, D_label_d)
 
-            loss = loss_adv_real_aims + loss_adv_real_kaggle + loss_adv_enhanced_aims + loss_adv_enhanced_kaggle
+            loss = loss_adv_real_aims + loss_adv_real_kaggle + loss_adv_enhanced_aims #+ loss_adv_enhanced_kaggle
             loss = loss / args.iter_size
 
             loss_D_log = loss.item()
@@ -200,21 +226,28 @@ def main():
                 p.requires_grad_(False)
 
             lightnet.zero_grad()
-            # model.zero_grad()
+            model.zero_grad()
 
             # aims -> enhanced
             r = lightnet(images_aims)
             enhancement_aims = r
-            enhanced_images_aims = images_aims + r * r_coeff
+            if generator == "lightnet":
+                enhanced_images_aims = images_aims + r * r_coeff
+            else:
+                enhanced_images_aims = r
             loss_enhance_bounds_aims = loss_bounds(enhanced_images_aims) # bounds loss
             loss_ci_aims = loss_ci(enhanced_images_aims, images_aims)
+            
             loss_enhance_aims = 10*loss_TV(r)+torch.mean(loss_SSIM(enhanced_images_aims, images_aims))\
                  + 5*torch.mean(loss_exp_z(enhanced_images_aims, mean_light)) + 0.1*loss_ci_aims\
                     + 5*loss_enhance_bounds_aims
 
             # kaggle -> enhanced
             r = lightnet(images_kaggle)
-            enhanced_images_kaggle = images_kaggle + r * r_coeff
+            if generator == "lightnet":
+                enhanced_images_kaggle = images_kaggle + r * r_coeff
+            else:
+                enhanced_images_kaggle = r
             loss_enhance_bounds_kaggle = loss_bounds(enhanced_images_kaggle) # bounds loss
             loss_ci_kaggle = loss_ci(enhanced_images_kaggle, images_kaggle)
             loss_enhance_kaggle = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(enhanced_images_kaggle, images_kaggle))\
@@ -227,7 +260,7 @@ def main():
             # scalar
             # D_label_d = torch.tensor([[kaggle_label]], dtype=torch.float).repeat((b_size, 1)).to(device)
             # patched
-            D_label_d = torch.FloatTensor(D_out_d.data.size()).fill_(kaggle_label).to(device) # use kaggle as want lightnet to produce kaggle style
+            D_label_d = torch.FloatTensor(D_out_d.data.size()).fill_(kaggle_label).to(device2) # use kaggle as want lightnet to produce kaggle style
             loss_adv_enhanced_kaggle = loss_bce(D_out_d, D_label_d)
             
             # Discriminator on enhanced aims
@@ -235,28 +268,32 @@ def main():
             loss_adv_enhanced_aims = loss_bce(D_out_d, D_label_d)
 
             ###### classifier task ####################################################################
-            # labels_kaggle = labels_kaggle.unsqueeze(1)
-            # labels_aims = labels_aims.unsqueeze(1)
-            # # orig kaggle
-            # pred_labels = model(images_kaggle)
-            # loss_classify_kaggle = loss_bce(pred_labels, labels_kaggle)
+            labels_kaggle = labels_kaggle.unsqueeze(1)
+            labels_aims = labels_aims.unsqueeze(1)
+            # orig kaggle
+            pred_labels = model(images_kaggle)
+            loss_classify_kaggle = loss_bce(pred_labels, labels_kaggle)
 
-            # # orig aims
-            # pred_labels = model(images_aims)
-            # loss_classify_aims = loss_bce(pred_labels, labels_aims)
+            # orig aims
+            #pred_labels = model(images_aims)
+            #loss_classify_aims = loss_bce(pred_labels, labels_aims)
 
             # # enhanced aims
             # pred_labels = model(enhanced_images_aims)
             # loss_classify_aims_enhanced = loss_bce(pred_labels, labels_aims)
 
-            # # enhanced kaggle
-            # pred_labels = model(enhanced_images_kaggle)
-            # loss_classify_kaggle_enhanced = loss_bce(pred_labels, labels_kaggle)
+            # enhanced kaggle
+            pred_labels = model(enhanced_images_kaggle)
+            loss_classify_kaggle_enhanced = loss_bce(pred_labels, labels_kaggle)
 
-            # loss_classifier = loss_classify_kaggle + loss_classify_aims + loss_classify_aims_enhanced + loss_classify_kaggle_enhanced
+            labels_kaggle = labels_kaggle.squeeze(1)
+            labels_aims = labels_aims.squeeze(1)
+
+            loss_classifier = loss_classify_kaggle + loss_classify_kaggle_enhanced
+            #loss_classifier = loss_classify_kaggle + loss_classify_aims + loss_classify_aims_enhanced + loss_classify_kaggle_enhanced
             ###########################################################################################
 
-            loss = loss_adv_enhanced_kaggle + loss_adv_enhanced_aims + loss_enhance_aims + loss_enhance_kaggle #+ loss_classifier
+            loss = loss_adv_enhanced_kaggle + loss_adv_enhanced_aims + loss_enhance_aims + loss_enhance_kaggle + 5*loss_classifier
             loss = loss / args.iter_size
 
             loss_enhance = loss_enhance_aims.item() + loss_enhance_kaggle.item()
@@ -296,6 +333,7 @@ def main():
                 kaggle_table.add_column("enhanced", log_images(enhanced_images_kaggle))
                 kaggle_table.add_column("D(enhanced) aims=1", D_out_d_kaggle.mean(dim=(1,2,3)).detach().cpu().numpy())
                 kaggle_table.add_column("cots", labels_kaggle.detach().cpu().numpy())
+                kaggle_table.add_column("P(cots)", pred_labels.sum(1).detach().cpu().numpy())
 
                 wandb.log({'aims_table': aims_table, 'kaggle_table': kaggle_table})
 
@@ -308,13 +346,13 @@ def main():
                 'loss/enhance': loss_enhance,
                 'loss/discriminatior': loss_D_log,
                 'loss/bounds': loss_enhance_bounds,
-                'loss/enhance_ci': loss_enhance_ci
-                # 'loss/classifier': loss_classifier.item()
+                'loss/enhance_ci': loss_enhance_ci,
+                'loss/classifier': loss_classifier.item()
             })
 
         # if i_iter % args.save_pred_every == 0 and i_iter != 0:
         print('taking snapshot ...')
-        # torch.save(model.state_dict(), os.path.join(args.snapshot_dir, 'dannet' + str(i_iter) + '.pth'))
+        torch.save(model.state_dict(), os.path.join(args.snapshot_dir, 'cots_classifier' + '.pth'))
         torch.save(lightnet.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_light_' + "latest" + '.pth'))
         torch.save(model_D.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_d_' + "latest" + '.pth'))
         # torch.save(model_D2.state_dict(), os.path.join(args.snapshot_dir, 'dannet_d2_' + str(i_iter) + '.pth'))
