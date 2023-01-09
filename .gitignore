@@ -1,0 +1,8 @@
+*.png
+*.pth
+*.pyc
+__pycache__/
+wandb/
+imgs/
+imgs_/
+.vscode/settings.json
