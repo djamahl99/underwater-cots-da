@@ -117,12 +117,13 @@ class PatchPosEmbedding(nn.Module):
 
     def forward(self, x):
         _, n, _ = x.shape
+        # print("x shape", x.shape, "pos embedding", self.pos_embedding.shape)
         x += self.pos_embedding[:, :n]
 
         return x
 
 class YoloTransformerAdapter(nn.Module):
-    def __init__(self, dim=64) -> None:
+    def __init__(self, dim=256) -> None:
         super().__init__()
 
         config = "yang_model/yolov5_l_kaggle_cots.py"
@@ -142,19 +143,20 @@ class YoloTransformerAdapter(nn.Module):
         patch_height, patch_width = 4, 4
         # used to assert feature sizes will be the same
         # self.orig_width, self.orig_height = 512, 512
-        self.orig_width, self.orig_height = 256, 256
+        self.orig_width, self.orig_height = 1280, 768
         # image_sizes = [(256, 64, 64), (512, 32, 32), (768, 16, 16), (1024, 8, 8)]
-        image_sizes = [(256, 32, 32), (512, 16, 16), (768, 8, 8), (1024, 4, 4)]
+        # image_sizes = [(256, 32, 32), (512, 16, 16), (768, 8, 8), (1024, 4, 4)]
+        image_sizes = [(256, 96, 160), (512, 48, 80), (768, 24, 40), (1024, 12, 20)]
 
         self.dim = dim
         cross_heads = 4
         dim_cross_heads = 64
         dim_head = 64
-        depth = 0
+        depth = 2
         heads = 4
         dropout = 0.01
         mlp_dim = dim
-        num_latents = 64
+        num_latents = 256
 
         self.layers_per_size = nn.ModuleList([])
         for channels, height, width  in image_sizes:
@@ -217,9 +219,13 @@ class YoloTransformerAdapter(nn.Module):
     def forward(self, x):
         assert list(x.shape[-2:]) == [self.orig_height, self.orig_width], f"{x.shape[-2:]} is not desired shape {[self.orig_height, self.orig_width]}"
 
-        feats: tuple = self.backbone(x)
+        with torch.no_grad():
+            feats: tuple = self.backbone(x)
 
         b = x.shape[0]
+
+        # print('x shape', [x.shape for x in feats])
+        # exit()
 
         # 0 torch.Size([1, 256, 64, 64])
         # 1 torch.Size([1, 512, 32, 32])
@@ -240,7 +246,7 @@ class YoloTransformerAdapter(nn.Module):
         for i, (decoder_cross_atnn, to_patch_embedding) in enumerate(self.patches_out):
             queries = self.queries_out[i].unsqueeze(0).repeat((b, 1, 1))
             out = decoder_cross_atnn(queries, context=x)
-            out = to_patch_embedding(out)
+            out = to_patch_embedding(out) + feats[i] # transformer learns residuals
             outs.append(out)
 
         return tuple(outs), x

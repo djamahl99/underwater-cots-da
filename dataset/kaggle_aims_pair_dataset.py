@@ -19,6 +19,9 @@ class kaggle_aims_pair(data.Dataset):
 
         size = (288, 512)
         size = (768, 1280)
+
+        # transformer
+        # size = (256, 256)
         
         # add more later
         self.transform_kaggle = T.Compose(transforms=[
@@ -41,12 +44,13 @@ class kaggle_aims_pair(data.Dataset):
 
         self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
         # self.aims_root = "/home/etc004/code/YOLOX/AIMS_data_test"
-        self.aims_root = "/mnt/d61-visage-data/work/datasets/"
+        # self.aims_root = "/mnt/d61-visage-data/work/datasets/"
+        self.aims_root = "AIMS_data_test"
 
         # just use train :)
         self.kaggle_anns = str(Path(self.kaggle_root) / "annotations/mmdet_split_train.json")
-        # self.aims_anns = str(Path(self.aims_root) / "annotations/test.json")
-        self.aims_anns = "aims_sep22.json"
+        self.aims_anns = str(Path(self.aims_root) / "annotations/train.json")
+        # self.aims_anns = "aims_sep22.json"
 
         with open(self.kaggle_anns, 'r') as f:
             kaggle_data = json.load(f)
@@ -58,7 +62,7 @@ class kaggle_aims_pair(data.Dataset):
         new_imgs = []
         for k in aims_data['images']:
             img = k
-            img['file_name'] = img['file_name'].replace("data/", "")
+            # img['file_name'] = img['file_name'].replace("data/", "")
             new_imgs.append(img)
 
         aims_data['images'] = new_imgs
@@ -98,8 +102,8 @@ class kaggle_aims_pair(data.Dataset):
         kl = len(self.kaggle_imgs_list)
         al = len(self.aims_imgs_list)
 
-        #self.aims_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.aims_imgs_list))
-        #self.kaggle_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.kaggle_imgs_list))
+        self.aims_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.aims_imgs_list))
+        self.kaggle_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.kaggle_imgs_list))
 
         print("lost images", kl - len(self.kaggle_imgs_list), al - len(self.aims_imgs_list))
 
@@ -107,7 +111,7 @@ class kaggle_aims_pair(data.Dataset):
 
         print("number of images", len(self.aims_imgs_list), len(self.kaggle_imgs_list))
 
-        self.shortest_list = 10000 # TODO
+        # self.shortest_list = 10000 # TODO
 
         assert self.shortest_list > 0, "shortest dataset should have more than 0 existing images!"
 
@@ -126,4 +130,4 @@ class kaggle_aims_pair(data.Dataset):
         kaggle_label = self.kaggle_imgs_list[kaggle_index]['label']
         aims_label = self.aims_imgs_list[aims_index]['label']
 
-        return self.transform_kaggle(kaggle_img), self.transform_aims(aims_img), torch.tensor(kaggle_label), torch.tensor(aims_label)
+        return self.transform_kaggle(kaggle_img), self.transform_aims(aims_img), torch.tensor([kaggle_label]), torch.tensor(aims_label)

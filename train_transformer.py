@@ -122,8 +122,6 @@ def main():
             
             images_kaggle = images_kaggle.to(device)
 
-            print("kaggle imgs", images_kaggle.shape,"aims", images_aims.shape)
-
             b_size = images_kaggle.shape[0]
 
             ########################################################################################################
@@ -170,23 +168,23 @@ def main():
             kaggle_feats, latent_dim_kaggle = transformer(images_kaggle)
 
             # D with aims
-            D_out_d = model_D(aims_feats)
-            D_label_d = torch.FloatTensor(D_out_d.data.size()).fill_(kaggle_label).to(device) # use kaggle as want lightnet to produce kaggle style
-            loss_adv_aims = loss_bce(D_out_d, D_label_d)
+            D_out_d_aims = model_D(aims_feats)
+            D_label_d = torch.FloatTensor(D_out_d_aims.data.size()).fill_(kaggle_label).to(device) # use kaggle as want lightnet to produce kaggle style
+            loss_adv_aims = loss_bce(D_out_d_aims, D_label_d)
 
             # D with kaggle
-            D_out_d = model_D(kaggle_feats)
-            D_label_d = torch.FloatTensor(D_out_d.data.size()).fill_(kaggle_label).to(device) # use kaggle as want lightnet to produce kaggle style
-            loss_adv_kaggle = loss_bce(D_out_d, D_label_d)
+            D_out_d_kaggle = model_D(kaggle_feats)
+            D_label_d = torch.FloatTensor(D_out_d_kaggle.data.size()).fill_(kaggle_label).to(device) # use kaggle as want lightnet to produce kaggle style
+            loss_adv_kaggle = loss_bce(D_out_d_kaggle, D_label_d)
 
             loss_transformer = loss_adv_aims + loss_adv_kaggle
 
             ########################################################################################################
             # Train COTS classifier (should change this to training yolo model)
             ########################################################################################################
+            model_D_cots.zero_grad()
 
             preds_cls = model_D_cots(kaggle_feats)
-            print("labels kaggle", labels_kaggle.shape, preds_cls.shape)
             loss_preds_kaggle = loss_bce(preds_cls, labels_kaggle)
 
             loss_classifier = loss_preds_kaggle
@@ -195,6 +193,32 @@ def main():
             
             loss.backward()
             optimizer.step()
+
+            # predictions
+            if j == len(trainloader) - 1 or j == 0 or j % 50 == 0:
+                aims_table = wandb.Table(columns=[], data=[])
+
+                #print_img_stats = lambda image: print("min max", image.min(), image.max())
+
+                def print_img_stats(img):
+                    img = np.clip(img, a_min=0, a_max=1)
+                    return img
+
+                log_images = lambda images: [wandb.Image(print_img_stats(images[i].permute(1,2,0).detach().cpu().numpy())) for i in range(images.shape[0])]
+
+                aims_table.add_column("aims", data=log_images(images_aims))
+                aims_table.add_column("D(enhanced) aims=1", D_out_d_aims.mean(dim=(1,2,3)).detach().cpu().numpy())
+                aims_table.add_column("cots", labels_aims.detach().cpu().numpy())
+
+                kaggle_table = wandb.Table(columns=[], data=[])
+
+                kaggle_table.add_column("kaggle", data=log_images(images_kaggle))
+                kaggle_table.add_column("D(enhanced) aims=1", D_out_d_kaggle.mean(dim=(1,2,3)).detach().cpu().numpy())
+                print("labels kaggle shape", labels_kaggle.flatten().shape, labels_aims.shape)
+                kaggle_table.add_column("cots", labels_kaggle.flatten().detach().cpu().numpy())
+                kaggle_table.add_column("P(cots)", preds_cls.sum(1).detach().cpu().numpy())
+
+                wandb.log({'aims_table': aims_table, 'kaggle_table': kaggle_table})
 
             j += 1
 
