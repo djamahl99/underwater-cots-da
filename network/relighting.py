@@ -210,9 +210,9 @@ class GammaLightNet(nn.Module):
 
         return gamma_correction - x
 
-def LightNet():
+def LightNet(ngf=64, n_blocks=3):
     # model = ResnetGeneratorHalf(3, 3, 64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=3)
-    model = ResnetGenerator(3, 3, 64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=3)
+    model = ResnetGenerator(3, 3, ngf, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=n_blocks)
     return model
 
 class L_grayscale(nn.Module):

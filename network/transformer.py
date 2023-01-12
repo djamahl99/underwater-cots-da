@@ -117,7 +117,7 @@ class PatchPosEmbedding(nn.Module):
 
     def forward(self, x):
         _, n, _ = x.shape
-        # print("x shape", x.shape, "pos embedding", self.pos_embedding.shape)
+        # print("x shape", x.shape, "pos embedding", self.pos_embedding[:, :n].shape)
         x += self.pos_embedding[:, :n]
 
         return x
@@ -243,13 +243,18 @@ class YoloTransformerAdapter(nn.Module):
             x = ff(x) + x
 
         outs = []
+        t_outs = []
         for i, (decoder_cross_atnn, to_patch_embedding) in enumerate(self.patches_out):
             queries = self.queries_out[i].unsqueeze(0).repeat((b, 1, 1))
             out = decoder_cross_atnn(queries, context=x)
-            out = to_patch_embedding(out) + feats[i] # transformer learns residuals
+            out = to_patch_embedding(out) # transformer learns residuals
+            out = out.reshape(feats[i].shape)
+            t_outs.append(out)
+            out = out + feats[i]
+            # print("feats[i]", feats[i].shape, out.shape)
             outs.append(out)
 
-        return tuple(outs), x
+        return tuple(outs), x, t_outs
 
 class FPNDiscriminator(nn.Module):
     def __init__(self, ndf=64, patched=True) -> None:
