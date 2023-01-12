@@ -24,7 +24,7 @@ class FCDiscriminator(nn.Module):
                                 nn.Linear(ndf*4, 1)
                         )
                 else:
-                        self.classifier = nn.Conv2d(ndf*4, ndf*4, kernel_size=4, stride=1, padding=1)
+                        self.classifier = nn.Conv2d(ndf*4, 1, kernel_size=4, stride=1, padding=1)
 
                 self.soft = nn.Sigmoid() # disjoint events [dataset, real/fake]
 

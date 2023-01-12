@@ -77,4 +77,6 @@ def get_arguments():
     parser.add_argument("--set", type=str, default=SET,
                         help="choose adaptation set.")
     parser.add_argument("--std", type=float, default=STD)
+    # added
+    parser.add_argument("--lightnet", type=bool, default=False)
     return parser.parse_args()
