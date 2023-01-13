@@ -95,7 +95,9 @@ def main():
     else:
         optimizer_ld = optim.Adam(darknet.parameters(), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
 
-    optimizer_model = optim.Adam(model.parameters(), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
+    # optimizer_model = optim.Adam(model.parameters(), lr=args.learning_rate_yolo, betas=(0.9, 0.99), weight_decay=args.weight_decay)
+    # from yang_model
+    optimizer_model = optim.SGD(model.parameters(), lr=0.005,momentum=0.937,weight_decay=0.0005)
 
     optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9, 0.99))
     optimizer_D.zero_grad()
@@ -321,7 +323,7 @@ def main():
                 # kaggle -> aims
                 r = darknet(images_kaggle)
                 kaggle_darkening = r
-                darker_images_kaggle = images_kaggle + r 
+                darker_images_kaggle = torch.clamp(images_kaggle + r, min=0.0, max=1.0) 
 
             h, w = images_kaggle.shape[-2:]
             img_metas = [dict(ori_shape=(h, w), scale_factor=1, batch_input_shape=(h,w)) for i in range(len(images_kaggle))]
@@ -334,6 +336,7 @@ def main():
                     bboxes = ds.kaggle_imgs_boxes[img_id.item()]['bboxes']
 
                     for box in bboxes:
+                        assert box[0::2].max() <= ds.size[1] and box[1::2].max() <= ds.size[0]
                         gt_instances.append([i, 1, *box])
 
             gt_instances = torch.tensor(gt_instances).to(device)
@@ -393,11 +396,11 @@ def main():
 
             wandb.log({
                 'iter': i_iter,
-                # 'num_steps': args.num_steps,
                 'loss/yolo': loss_yolo.item(),
-                'loss/yolo+lightnet+darknet': loss.item(),
+                'loss/yolo_kaggle': loss_yolo_kaggle.item(),
+                'loss/yolo_kaggle_dark': loss_yolo_kaggle_dark.item(),
                 'loss/enhance': loss_enhancement.item(),
-                'loss/discriminatior': loss_D_log,
+                'loss/discriminator': loss_D_log,
                 'loss/cls': loss_cls.item(),
                 'loss/bbox': loss_bbox.item(),
                 'loss/obj': loss_obj.item(),
@@ -406,7 +409,7 @@ def main():
 
         # if i_iter % args.save_pred_every == 0 and i_iter != 0:
         print('taking snapshot ...')
-        torch.save(model.state_dict(), os.path.join(args.snapshot_dir, 'cots_classifier' + '.pth'))
+        torch.save(model.state_dict(), os.path.join(args.snapshot_dir, '_yolo_' + '.pth'))
         if args.lightnet:
             torch.save(lightnet.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_light_' + "latest" + '.pth'))
         torch.save(darknet.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_dark_' + "latest" + '.pth'))
