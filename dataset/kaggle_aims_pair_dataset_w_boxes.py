@@ -42,10 +42,12 @@ class kaggle_aims_pair_boxed(data.Dataset):
             T.ToTensor()
         ])
 
+        # self.kaggle_root = "/mnt/storage/djamahl/data/Kaggle_1080_google_v1"
         self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
+
         # self.aims_root = "/home/etc004/code/YOLOX/AIMS_data_test"
         # self.aims_root = "/mnt/d61-visage-data/work/datasets/"
-        self.aims_root = "AIMS_data_test"
+        self.aims_root = "../AIMS_data_test"
 
         # just use train :)
         self.kaggle_anns = str(Path(self.kaggle_root) / "annotations/mmdet_split_train.json")
@@ -83,9 +85,22 @@ class kaggle_aims_pair_boxed(data.Dataset):
                 old_size = (image['height'], image['width'])
                 ratios = (self.size[0]/old_size[0], self.size[1]/old_size[1])
 
+                # coco 2 xyxy
                 bbox = np.array(ann['bbox'])
+                [xy1, wh] = np.split(bbox, (2))
+                xy2 = xy1 + wh
+                bbox = np.concatenate((xy1, xy2), axis=-1)
+
+                # print('bbox before rescale', bbox)
+
                 bbox[0::2] *= ratios[1]
                 bbox[1::2] *= ratios[0]
+    
+                bbox[0::2] = np.clip(bbox[0::2], 0.0, float(self.size[1]))
+                bbox[1::2] = np.clip(bbox[1::2], 0.0, float(self.size[0]))
+                # print('bbox after rescale', bbox)
+
+                assert bbox[0::2].max() <= self.size[1] and bbox[1::2].max() <= self.size[0], f"bbox OOB after rescale? {bbox} {self.size} {old_size} {ratios}"
 
                 kaggle_imgs_boxes[ann['image_id']]['bboxes'].append(bbox)
                 kaggle_imgs_boxes[ann['image_id']]['labels'].append(1)
