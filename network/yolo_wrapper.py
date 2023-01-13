@@ -28,13 +28,12 @@ class WrappedYOLO(nn.Module):
         self.head = model.bbox_head
 
     def forward_pred_no_grad(self, x):
-        with torch.no_grad():
-                x = self.backbone(x)
-                x = self.neck(x)
-                x = self.head(x)
-
         h, w = x.shape[-2:]
         b = x.shape[0]
+        with torch.no_grad():
+            x = self.backbone(x)
+            x = self.neck(x)
+            x = self.head(x)
 
         img_metas = [dict(ori_shape=(h, w), scale_factor=1, batch_input_shape=(h,w)) for _ in range(b)]
         preds = self.head.predict_by_feat(x[0], x[1], x[2], img_metas,\
@@ -47,11 +46,13 @@ class WrappedYOLO(nn.Module):
             bboxes_ = []
             scores_ = []
             for j in range(len(preds[i]['bboxes'])):
-                bboxes_.append(preds[i]['bboxes'][j])
-                scores_.append(preds[i]['scores'][j])
+                bboxes_.append(preds[i]['bboxes'][j].detach().cpu().numpy())
+                scores_.append(preds[i]['scores'][j].item())
             bboxes.append(bboxes_)
             scores.append(scores_)
 
+        # print("bboxes-", bboxes)
+        # print("scores-", scores)
         bboxes = torch.tensor(bboxes)
         scores = torch.tensor(scores)
 

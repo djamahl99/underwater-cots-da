@@ -19,6 +19,7 @@ NUM_CLASSES = 19
 IGNORE_LABEL = 255
 
 LEARNING_RATE = 1e-4
+LEARNING_RATE_YOLO = 1e-5
 POWER = 0.9
 MOMENTUM = 0.9
 WEIGHT_DECAY = 0.0005
@@ -58,6 +59,8 @@ def get_arguments():
                         help="Base learning rate for training with pimgolynomial decay.")
     parser.add_argument("--learning-rate-D", type=float, default=LEARNING_RATE_D,
                         help="Base learning rate for discriminator.")
+    parser.add_argument("--learning-rate-yolo", type=float, default=LEARNING_RATE_YOLO,
+                        help="Base learning rate for yolo.")
     parser.add_argument("--momentum", type=float, default=MOMENTUM,
                         help="Momentum component of the optimiser.")
     parser.add_argument("--num-classes", type=int, default=NUM_CLASSES,

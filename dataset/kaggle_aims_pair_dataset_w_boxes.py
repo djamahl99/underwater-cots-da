@@ -14,17 +14,20 @@ import numpy as np
 import torchvision.transforms as T
 
 class kaggle_aims_pair_boxed(data.Dataset):
-    def __init__(self) -> None:
+    def __init__(self, aims_split="train.json") -> None:
         super().__init__()
 
-        size = (288, 512) # for testing on tactile
-        size = (768, 1280)
-        # size = 
+        assert aims_split in ["train.json", "val.json", "test.json"]
+        self.aims_split = aims_split
+
+        # size = (288, 512) # for testing on tactile
+        self.size = (768, 1280)
+        # self.size = (1088, 1920)
         
         # add more later
         self.transform_kaggle = T.Compose(transforms=[
             #T.CenterCrop(1080),
-            T.Resize(size),
+            T.Resize(self.size),
             # T.RandomPerspective(distortion_scale=0.1),
             # T.RandomAutocontrast(p=0.1),
             # T.RandomEqualize(),
@@ -35,8 +38,7 @@ class kaggle_aims_pair_boxed(data.Dataset):
         ])
 
         self.transform_aims = T.Compose(transforms=[
-            #T.CenterCrop(3040),
-            T.Resize(size),
+            T.Resize(self.size),
             T.ToTensor()
         ])
 
@@ -47,7 +49,7 @@ class kaggle_aims_pair_boxed(data.Dataset):
 
         # just use train :)
         self.kaggle_anns = str(Path(self.kaggle_root) / "annotations/mmdet_split_train.json")
-        self.aims_anns = str(Path(self.aims_root) / "annotations/train.json")
+        self.aims_anns = str(Path(self.aims_root) / f"annotations/{aims_split}")
         # self.aims_anns = "aims_sep22.json"
 
         with open(self.kaggle_anns, 'r') as f:
@@ -56,14 +58,7 @@ class kaggle_aims_pair_boxed(data.Dataset):
         with open(self.aims_anns, 'r') as f:
             aims_data = json.load(f)
 
-        # fix aims location changes
-        new_imgs = []
-        for k in aims_data['images']:
-            img = k
-            # img['file_name'] = img['file_name'].replace("data/", "")
-            new_imgs.append(img)
-
-        aims_data['images'] = new_imgs
+        kaggle_image_id_to_image = {x['id']: x for x in kaggle_data['images']}
 
         kaggle_imgs_labels = {}
         kaggle_imgs_boxes = {}
@@ -72,8 +67,6 @@ class kaggle_aims_pair_boxed(data.Dataset):
         cots_cat_id_kaggle = 0
         cots_cat_id_aims = 1
 
-        print("cats", aims_data['categories'], kaggle_data['categories'])
-        
         for ann in tqdm(aims_data['annotations']):
             if ann['category_id'] == cots_cat_id_aims:
                 aims_imgs_labels[ann['image_id']] = 1.0
@@ -85,7 +78,16 @@ class kaggle_aims_pair_boxed(data.Dataset):
                 if not ann['image_id'] in kaggle_imgs_boxes:
                     kaggle_imgs_boxes[ann['image_id']] = {'bboxes': [], 'labels': []}
 
-                kaggle_imgs_boxes[ann['image_id']]['bboxes'].append(ann['bbox'])
+                # rescale the box to the current size
+                image = kaggle_image_id_to_image[ann['image_id']]
+                old_size = (image['height'], image['width'])
+                ratios = (self.size[0]/old_size[0], self.size[1]/old_size[1])
+
+                bbox = np.array(ann['bbox'])
+                bbox[0::2] *= ratios[1]
+                bbox[1::2] *= ratios[0]
+
+                kaggle_imgs_boxes[ann['image_id']]['bboxes'].append(bbox)
                 kaggle_imgs_boxes[ann['image_id']]['labels'].append(1)
 
         ms = -1
@@ -114,16 +116,13 @@ class kaggle_aims_pair_boxed(data.Dataset):
             else: 
                 num_without += 1
 
-        print(f"with={num_with_boxes} without ={num_without}")
-
-        print("boxx?")
-        # exit()
+        print(f"kaggle with anns={num_with_boxes} without anns ={num_without}")
 
         kl = len(self.kaggle_imgs_list)
         al = len(self.aims_imgs_list)
 
         self.aims_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.aims_imgs_list))
-        # self.kaggle_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.kaggle_imgs_list))
+        self.kaggle_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.kaggle_imgs_list))
 
         print("lost images", kl - len(self.kaggle_imgs_list), al - len(self.aims_imgs_list))
 
@@ -136,26 +135,32 @@ class kaggle_aims_pair_boxed(data.Dataset):
         assert self.shortest_list > 0, "shortest dataset should have more than 0 existing images!"
 
     def __len__(self):
-        return len(self.kaggle_imgs_list)
+        if self.aims_split == "train.json":
+            # go through all kaggle (training yolo)
+            return len(self.kaggle_imgs_list)
+
+        # go though all aims split (evaluating yolo on aims val/test)
+        return len(self.aims_imgs_list)
         # return self.shortest_list
 
     def __getitem__(self, index) -> tuple:
-        # so that we don't always pair the same aims / kaggle image
-        aims_index = np.random.randint(low=0, high=self.shortest_list)
-        # kaggle_index = np.random.randint(low=0, high=self.shortest_list)
-        kaggle_index = index
+        if self.aims_split == "train.json":
+            # so that we don't always pair the same aims / kaggle image
+            aims_index = np.random.randint(low=0, high=self.shortest_list)
+            # kaggle_index = np.random.randint(low=0, high=self.shortest_list)
+            kaggle_index = index
+        else:
+            aims_index = index
+            kaggle_index = index
 
         aims_img = Image.open(self.aims_imgs_list[aims_index]['file_name'])
         kaggle_img = Image.open(self.kaggle_imgs_list[kaggle_index]['file_name'])
 
         kaggle_label = self.kaggle_imgs_list[kaggle_index]['label']
         image_id = self.kaggle_imgs_list[kaggle_index]['image_id']
-        # kaggle_boxes = self.kaggle_imgs_list[kaggle_index]['boxes']
-        # kaggle_labels = self.kaggle_imgs_list[kaggle_index]['labels']
+        if self.aims_split != "train.json":
+            image_id = self.aims_imgs_list[aims_index]['image_id']
 
         aims_label = self.aims_imgs_list[aims_index]['label']
-
-        # boxes = torch.tensor([kaggle_boxes['bboxes']])
-        # print("tensor", boxes)
 
         return self.transform_kaggle(kaggle_img), self.transform_aims(aims_img), image_id, torch.tensor(kaggle_label), torch.tensor(aims_label)
