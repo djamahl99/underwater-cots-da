@@ -37,10 +37,13 @@ def process_ann_box(ann: dict, image: dict, size: tuple):
     return bbox
 
 class kaggle_aims_pair_boxed(data.Dataset):
-    def __init__(self, aims_split="train.json") -> None:
+    def __init__(self, aims_split="train.json", kaggle_split="mmdet_split_train.json") -> None:
         super().__init__()
 
         assert aims_split in ["train.json", "val.json", "test.json"]
+        assert kaggle_split in ["mmdet_split_train.json", "mmdet_split_test.json"]
+        
+        self.kaggle_split = kaggle_split
         self.aims_split = aims_split
 
         # size = (288, 512) # for testing on tactile
@@ -65,15 +68,15 @@ class kaggle_aims_pair_boxed(data.Dataset):
             T.ToTensor()
         ])
 
-        # self.kaggle_root = "/mnt/storage/djamahl/data/Kaggle_1080_google_v1"
-        self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
+        self.kaggle_root = "/mnt/storage/djamahl/data/Kaggle_1080_google_v1"
+        # self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
 
         # self.aims_root = "/home/etc004/code/YOLOX/AIMS_data_test"
         # self.aims_root = "/mnt/d61-visage-data/work/datasets/"
-        self.aims_root = "AIMS_data_test"
+        self.aims_root = "../AIMS_data_test"
 
         # just use train :)
-        self.kaggle_anns = str(Path(self.kaggle_root) / "annotations/mmdet_split_train.json")
+        self.kaggle_anns = str(Path(self.kaggle_root) / f"annotations/{kaggle_split}")
         self.aims_anns = str(Path(self.aims_root) / f"annotations/{aims_split}")
         # self.aims_anns = "aims_sep22.json"
 
@@ -170,6 +173,7 @@ class kaggle_aims_pair_boxed(data.Dataset):
         return len(self.aims_imgs_list)
 
     def __getitem__(self, index) -> tuple:
+        # if aims is val/test -> give aims boxes for evaluation 
         if self.aims_split == "train.json":
             # so that we don't always pair the same aims / kaggle image
             aims_index = np.random.randint(low=0, high=self.shortest_list)

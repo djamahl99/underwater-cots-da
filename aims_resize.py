@@ -30,7 +30,7 @@ if __name__ == "__main__":
     path = "/home/etc004/code/mmyolo/data/aims"
     annot_dir = f"{path}"
 
-    new_path = "AIMS_data_test"
+    new_path = "../AIMS_data_test"
     new_annot_dir = f"{new_path}/annotations"
 
     if not os.path.exists(new_annot_dir):

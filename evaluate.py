@@ -11,7 +11,14 @@ from pycocotools.coco import COCO
 import json
 
 def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed):
-    aims_ann = ds.aims_anns
+    aims_test = True
+    ann_path = ds.aims_anns
+    imgs_boxes = ds.aims_imgs_boxes
+
+    if ds.kaggle_split == "mmdet_split_test.json":
+        aims_test = False
+        ann_path = ds.kaggle_anns
+        ds.kaggle_imgs_boxes
 
     loader = data.DataLoader(
         ds, batch_size=1, shuffle=False, num_workers=1, pin_memory=True
@@ -26,13 +33,13 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed):
 
     results_coco = {}
 
-    with open(aims_ann, "r") as f:
-        aims_d = json.load(f)
+    with open(ann_path, "r") as f:
+        data_dict = json.load(f)
 
-    cats = aims_d['categories'][0]
+    cats = data_dict['categories'][0]
     results_coco['categories'] = [cats]
     
-    for img in aims_d['images']:
+    for img in data_dict['images']:
         img_ = img
         img_['width'] = ds.size[1]
         img_['height'] = ds.size[0]
@@ -48,16 +55,19 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed):
     ann_id_gt = 0
 
     # now run preds
-    for _, images_aims, image_ids, _, _ in tqdm(loader, desc="Evaluating"):
-        images_aims = images_aims.to(device)
+    for images_kaggle, images_aims, image_ids, _, _ in tqdm(loader, desc="Evaluating"):
+        if aims_test:
+            images = images_aims.to(device)
+        else:
+            images = images_kaggle.to(device)
 
-        num_boxes = sum([0 if img_id.item() not in ds.aims_imgs_boxes else len(ds.aims_imgs_boxes[img_id.item()]['bboxes']) for img_id in image_ids])
+        num_boxes = sum([0 if img_id.item() not in imgs_boxes else len(imgs_boxes[img_id.item()]['bboxes']) for img_id in image_ids])
         gt_instances = torch.zeros((num_boxes, 6), dtype=torch.float32)
 
         box_i = 0
         for i, img_id in enumerate(image_ids):
-            if img_id.item() in ds.aims_imgs_boxes:
-                bboxes = ds.aims_imgs_boxes[img_id.item()]['bboxes']
+            if img_id.item() in imgs_boxes:
+                bboxes = imgs_boxes[img_id.item()]['bboxes']
 
                 for box in bboxes:
                     box = torch.tensor(box)
@@ -89,7 +99,7 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed):
                     ))
                     ann_id_gt += 1
         
-        bboxes, scores = yolo.forward_pred_no_grad(images_aims)
+        bboxes, scores = yolo.forward_pred_no_grad(images)
         
         bboxes = bboxes.flatten(0,-2)
         scores = scores.flatten(0,-1)
@@ -154,6 +164,7 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed):
     
 if __name__ == "__main__":
     ds = kaggle_aims_pair_boxed(aims_split="test.json")
+    # ds = kaggle_aims_pair_boxed(kaggle_split="mmdet_split_test.json")
 
     model = WrappedYOLO().eval()
     map50 = evaluate(model, ds)

@@ -86,11 +86,11 @@ def main():
     if args.lightnet:
         lightnet = LightNet() # aims -> kaggle
     darknet = LightNet() # kaggle -> aims
-    saved_state_dict = torch.load("snapshots/yolo/flowing-salad-12_dark_latest.pth")
+    saved_state_dict = torch.load("snapshots/PSPNet/fluent-morning-24_dark_latest.pth")
 
     if args.lightnet:
         lightnet = nn.DataParallel(lightnet)
-        lightnet.load_state_dict(saved_state_dict)
+        # lightnet.load_state_dict(saved_state_dict)
 
     darknet = nn.DataParallel(darknet)
     darknet.load_state_dict(saved_state_dict)
@@ -102,10 +102,15 @@ def main():
     darknet.train()
     darknet.to(device)
 
-    model_D = FCDiscriminator(num_classes=3) # classes = num input channels    
+    # model_D = FCDiscriminator(num_classes=3) # classes = num input channels    
+    model_D = NLayerDiscriminator(input_nc=3, ndf=64, n_layers=3) # classes = num input channels    
+    init_weights(model_D)
     model_D = nn.DataParallel(model_D)
-    saved_state_dict = torch.load("snapshots/yolo/flowing-salad-12_d_latest.pth")
-    model_D.load_state_dict(saved_state_dict)
+    saved_state_dict = torch.load("snapshots/PSPNet/fluent-morning-24_d_latest.pth")
+    # print(saved_state_dict.keys())
+    # model_D.load_state_dict(saved_state_dict)
+    # exit()
+
     model_D.train()
     model_D.to(device)
 
@@ -122,7 +127,7 @@ def main():
         ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True
     )
 
-    ds_val_aims = kaggle_aims_pair_boxed()
+    ds_val_aims = kaggle_aims_pair_boxed(aims_split="val.json")
 
     if args.lightnet:
         optimizer_ld = optim.Adam(list(lightnet.parameters()) + list(darknet.parameters()) + list(model.parameters()), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
@@ -130,6 +135,7 @@ def main():
         optimizer_ld = optim.Adam(darknet.parameters(), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
 
     optimizer_model = optim.Adam(model.parameters(), lr=args.learning_rate_yolo, betas=(0.9, 0.99), weight_decay=args.weight_decay)
+    scheduler_model = optim.lr_scheduler.ReduceLROnPlateau(optimizer_model, 'max', patience=5)
     # from yang_model
     # optimizer_model = optim.SGD(model.backbone.parameters(), lr=0.005,momentum=0.937,weight_decay=0.0005)
 
@@ -141,11 +147,17 @@ def main():
     loss_exp_z = L_exp_z(32)
     loss_TV = L_TV()
     loss_SSIM = SSIM()
-    loss_bce = nn.BCELoss()
+    loss_bce = nn.BCEWithLogitsLoss()
     loss_ci = L_ColorInvarianceConv(invariant='W')
 
     kaggle_label = 0.0
     aims_label = 1.0
+
+    yolo_loss_weights = dict(
+        loss_cls=0.22499999999999998,
+        loss_bbox=0.037500000000000006,
+        loss_obj=2.0999999999999996
+    )
 
     wandb.init(
         project="DANNet YOLO DA",
@@ -156,11 +168,21 @@ def main():
             discriminator=model_D.module._get_name(),
             lr_yolo=args.learning_rate_yolo,
             # lightnet=lightnet.module._get_name(),
-            darknet=darknet.module._get_name()
+            darknet=darknet.module._get_name(),
+            yolo_loss_weights=yolo_loss_weights
         )
     )
 
     wandb.watch(models=[model])
+
+    # Validation ###################################
+    map50 = evaluate(model, ds_val_aims)
+    wandb.log({
+        'val/aims/map50': map50,
+        'lr': optimizer_model.param_groups[0]['lr']
+    })
+    scheduler_model.step(map50)
+    ################################################
 
     for i_iter in range(args.num_steps):
         optimizer_model.zero_grad()
@@ -264,7 +286,7 @@ def main():
 
                 loss_ci_aims_brighten = loss_ci(brighter_images_aims, images_aims)
                 loss_brighten_aims = 10*loss_TV(r)+torch.mean(loss_SSIM(brighter_images_aims, images_aims))\
-                    + 5*torch.mean(loss_exp_z(brighter_images_aims, mean_light)) + loss_ci_aims_brighten
+                    + 5*torch.mean(loss_exp_z(brighter_images_aims, mean_light)) + 0.0*loss_ci_aims_brighten
 
             # kaggle -> aims
             r = darknet(images_kaggle)
@@ -273,7 +295,7 @@ def main():
 
             loss_ci_kaggle_darken = loss_ci(darker_images_kaggle, images_aims)
             loss_darken_kaggle = 10*loss_TV(r)+torch.mean(loss_SSIM(darker_images_kaggle, images_aims))\
-                 + 5*torch.mean(loss_exp_z(darker_images_kaggle, mean_dark)) + loss_ci_kaggle_darken
+                 + 5*torch.mean(loss_exp_z(darker_images_kaggle, mean_dark)) + 0.0*loss_ci_kaggle_darken
 
             if args.lightnet:
                 # kaggle -> kaggle
@@ -282,7 +304,7 @@ def main():
 
                 loss_ci_kaggle_brighten = loss_ci(brighter_images_kaggle, images_kaggle)
                 loss_brighten_kaggle = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(brighter_images_kaggle, images_kaggle))\
-                                + 5*torch.mean(loss_exp_z(brighter_images_kaggle, mean_light)) + loss_ci_kaggle_brighten
+                                + 5*torch.mean(loss_exp_z(brighter_images_kaggle, mean_light)) + 0.0*loss_ci_kaggle_brighten
 
             # aims -> aims
             r = darknet(images_aims)
@@ -290,7 +312,7 @@ def main():
 
             loss_ci_aims_darken = loss_ci(darker_images_aims, images_aims)
             loss_darken_aims = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(darker_images_aims, images_aims))\
-                            + 5*torch.mean(loss_exp_z(darker_images_aims, mean_dark)) + loss_ci_aims_darken
+                            + 5*torch.mean(loss_exp_z(darker_images_aims, mean_dark)) + 0.0*loss_ci_aims_darken
 
             if args.lightnet:
                 loss_enhancement = loss_brighten_aims + loss_darken_kaggle + loss_brighten_kaggle + loss_darken_aims
@@ -379,19 +401,23 @@ def main():
                     for box in bboxes:
                         assert box[0::2].max() <= ds.size[1] and box[1::2].max() <= ds.size[0]
                         gt_instances[box_i, :] = torch.tensor([float(i), 1.0, *box], dtype=torch.float32)
-                        print(f"gt box[{box_i}] ", box)
                         box_i += 1
-                        # gt_instances.append(np.array([float(i), 1.0, *box], dtype=np.float32))
 
-            gt_instances_orig = gt_instances
-            #gt_instances = gt_instances.to(device, dtype=torch.float32)
-            # print("to cuda", gt_instances)
-            # gt_instances = torch.tensor(gt_instances, dtype=torch.float32).to(device, dtype=torch.float32)
+            # losses_kaggle = model(images_kaggle, instance_datas=gt_instances.clone().to(device, dtype=torch.float32), img_metas=img_metas)
+            losses_kaggle = {'loss_cls': 0, 'loss_obj': 0, 'loss_bbox': 0}
 
-            losses_kaggle = model(images_kaggle, instance_datas=gt_instances.clone().to(device, dtype=torch.float32), img_metas=img_metas)
             losses_darker_kaggle = model(darker_images_kaggle, instance_datas=gt_instances.clone().to(device, dtype=torch.float32), img_metas=img_metas)
 
+            losses_kaggle['loss_cls'] *= yolo_loss_weights['loss_cls']
+            losses_kaggle['loss_bbox'] *= yolo_loss_weights['loss_bbox']
+            losses_kaggle['loss_obj'] *= yolo_loss_weights['loss_obj']
+
+            losses_darker_kaggle['loss_cls'] *= yolo_loss_weights['loss_cls']
+            losses_darker_kaggle['loss_bbox'] *= yolo_loss_weights['loss_bbox']
+            losses_darker_kaggle['loss_obj'] *= yolo_loss_weights['loss_obj']
+
             loss_yolo_kaggle = losses_kaggle['loss_cls'] + losses_kaggle['loss_obj'] + losses_kaggle['loss_bbox']
+            loss_yolo_kaggle = torch.tensor(0)
             loss_yolo_kaggle_dark = losses_darker_kaggle['loss_cls'] + losses_darker_kaggle['loss_obj'] + losses_darker_kaggle['loss_bbox']
 
             loss_yolo = loss_yolo_kaggle + loss_yolo_kaggle_dark
@@ -495,7 +521,7 @@ def main():
             wandb.log({
                 'iter': i_iter,
                 'loss/yolo': loss_yolo.item(),
-                'loss/yolo_kaggle': loss_yolo_kaggle.item(),
+                'loss/yolo_kaggle': 0 if type(loss_yolo_kaggle) != torch.tensor else loss_yolo_kaggle.item(),
                 'loss/yolo_kaggle_dark': loss_yolo_kaggle_dark.item(),
                 'loss/enhance': loss_enhancement.item(),
                 'loss/discriminator': loss_D_log,
@@ -505,16 +531,19 @@ def main():
                 'loss/adversarial': loss_adv.item()
             })
 
-        # Validation ###################################
-        map50 = evaluate(model, ds_val_aims)
-        wandb.log({
-            'val/aims/map50': map50
-        })
-        ################################################
+            if j % 1000 == 0:
+                # Validation ###################################
+                map50 = evaluate(model, ds_val_aims)
+                scheduler_model.step(map50)
+                wandb.log({
+                    'val/aims/map50': map50,
+                    'lr': optimizer_model.param_groups[0]['lr']
+                })
+                ################################################
 
         # if i_iter % args.save_pred_every == 0 and i_iter != 0:
         print('taking snapshot ...')
-        torch.save(model.state_dict(), os.path.join(args.snapshot_dir, '_yolo_' + '.pth'))
+        torch.save(model.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_yolo_latest' + '.pth'))
         if args.lightnet:
             torch.save(lightnet.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_light_' + "latest" + '.pth'))
         torch.save(darknet.state_dict(), os.path.join(args.snapshot_dir, f'{wandb.run.name}_dark_' + "latest" + '.pth'))
