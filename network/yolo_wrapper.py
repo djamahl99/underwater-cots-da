@@ -25,7 +25,7 @@ class WrappedYOLO(nn.Module):
 
         self.backbone = model.backbone
         self.neck = model.neck
-        self.head = model.bbox_head
+        self.bbox_head = model.bbox_head
 
     def forward_pred_no_grad(self, x):
         h, w = x.shape[-2:]
@@ -33,10 +33,10 @@ class WrappedYOLO(nn.Module):
         with torch.no_grad():
             x = self.backbone(x)
             x = self.neck(x)
-            x = self.head(x)
+            x = self.bbox_head(x)
 
         img_metas = [dict(ori_shape=(h, w), scale_factor=1, batch_input_shape=(h,w)) for _ in range(b)]
-        preds = self.head.predict_by_feat(x[0], x[1], x[2], img_metas,\
+        preds = self.bbox_head.predict_by_feat(x[0], x[1], x[2], img_metas,\
                 rescale=False, with_nms=True)
 
         # get bboxes etc
@@ -68,8 +68,8 @@ class WrappedYOLO(nn.Module):
         # print("x", x.shape, len(instance_datas), len(img_metas))
         x = self.backbone(imgs)
         x = self.neck(x)
-        x = self.head(x)
+        x = self.bbox_head(x)
 
         loss_inputs = x + (instance_datas, img_metas)
-        losses = self.head.loss_by_feat(*loss_inputs)
+        losses = self.bbox_head.loss_by_feat(*loss_inputs)
         return losses

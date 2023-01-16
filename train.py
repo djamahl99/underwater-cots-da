@@ -19,7 +19,7 @@ import torchvision
 from network.yolo_wrapper import WrappedYOLO
 from network.relighting import L_ColorInvarianceConv, Loss_bounds
 
-from network.deeprelight_networks import define_G, VGGLoss
+from evaluate import evaluate
 
 def lr_poly(base_lr, iter, max_iter, power):
     return base_lr * ((1 - float(iter) / max_iter) ** (power))
@@ -86,7 +86,7 @@ def main():
     if args.lightnet:
         lightnet = LightNet() # aims -> kaggle
     darknet = LightNet() # kaggle -> aims
-    saved_state_dict = torch.load("snapshots/exalted-snow-144_light_latest.pth")
+    saved_state_dict = torch.load("snapshots/yolo/flowing-salad-12_dark_latest.pth")
 
     if args.lightnet:
         lightnet = nn.DataParallel(lightnet)
@@ -104,6 +104,8 @@ def main():
 
     model_D = FCDiscriminator(num_classes=3) # classes = num input channels    
     model_D = nn.DataParallel(model_D)
+    saved_state_dict = torch.load("snapshots/yolo/flowing-salad-12_d_latest.pth")
+    model_D.load_state_dict(saved_state_dict)
     model_D.train()
     model_D.to(device)
 
@@ -120,14 +122,16 @@ def main():
         ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True
     )
 
+    ds_val_aims = kaggle_aims_pair_boxed()
+
     if args.lightnet:
         optimizer_ld = optim.Adam(list(lightnet.parameters()) + list(darknet.parameters()) + list(model.parameters()), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
     else:
         optimizer_ld = optim.Adam(darknet.parameters(), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
 
-    # optimizer_model = optim.Adam(model.parameters(), lr=args.learning_rate_yolo, betas=(0.9, 0.99), weight_decay=args.weight_decay)
+    optimizer_model = optim.Adam(model.parameters(), lr=args.learning_rate_yolo, betas=(0.9, 0.99), weight_decay=args.weight_decay)
     # from yang_model
-    optimizer_model = optim.SGD(model.parameters(), lr=1e-4,momentum=0.937,weight_decay=0.0005)
+    # optimizer_model = optim.SGD(model.backbone.parameters(), lr=0.005,momentum=0.937,weight_decay=0.0005)
 
     optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9, 0.99))
     optimizer_D.zero_grad()
@@ -139,7 +143,6 @@ def main():
     loss_SSIM = SSIM()
     loss_bce = nn.BCELoss()
     loss_ci = L_ColorInvarianceConv(invariant='W')
-    loss_bounds = Loss_bounds()
 
     kaggle_label = 0.0
     aims_label = 1.0
@@ -151,6 +154,7 @@ def main():
             darknet_ngf=darknet.module.ngf,
             color_invariant=loss_ci.invariant,
             discriminator=model_D.module._get_name(),
+            lr_yolo=args.learning_rate_yolo,
             # lightnet=lightnet.module._get_name(),
             darknet=darknet.module._get_name()
         )
@@ -365,7 +369,7 @@ def main():
             # (img_ind, labels, bbox_cx, bbox_cy, bbox_w, bbox_h)
             
             num_boxes = sum([0 if img_id.item() not in ds.kaggle_imgs_boxes else len(ds.kaggle_imgs_boxes[img_id.item()]['bboxes']) for img_id in image_ids])
-            gt_instances = torch.zeros((num_boxes, 6))
+            gt_instances = torch.zeros((num_boxes, 6), dtype=torch.float32)
 
             box_i = 0
             for i, img_id in enumerate(image_ids):
@@ -380,12 +384,12 @@ def main():
                         # gt_instances.append(np.array([float(i), 1.0, *box], dtype=np.float32))
 
             gt_instances_orig = gt_instances
-            gt_instances = gt_instances.to(device, dtype=torch.float32)
+            #gt_instances = gt_instances.to(device, dtype=torch.float32)
             # print("to cuda", gt_instances)
             # gt_instances = torch.tensor(gt_instances, dtype=torch.float32).to(device, dtype=torch.float32)
 
-            losses_kaggle = model(images_kaggle, instance_datas=gt_instances, img_metas=img_metas)
-            losses_darker_kaggle = model(darker_images_kaggle, instance_datas=gt_instances, img_metas=img_metas)
+            losses_kaggle = model(images_kaggle, instance_datas=gt_instances.clone().to(device, dtype=torch.float32), img_metas=img_metas)
+            losses_darker_kaggle = model(darker_images_kaggle, instance_datas=gt_instances.clone().to(device, dtype=torch.float32), img_metas=img_metas)
 
             loss_yolo_kaggle = losses_kaggle['loss_cls'] + losses_kaggle['loss_obj'] + losses_kaggle['loss_bbox']
             loss_yolo_kaggle_dark = losses_darker_kaggle['loss_cls'] + losses_darker_kaggle['loss_obj'] + losses_darker_kaggle['loss_bbox']
@@ -454,7 +458,7 @@ def main():
             #     exit()
 
             # predictions
-            if j == len(trainloader) - 1 or j == 0 or j % 50 == 0:
+            if j == len(trainloader) - 1 or j == 0 or j % 1000 == 0:
 
                 #print_img_stats = lambda image: print("min max", image.min(), image.max())
 
@@ -500,6 +504,13 @@ def main():
                 'loss/obj': loss_obj.item(),
                 'loss/adversarial': loss_adv.item()
             })
+
+        # Validation ###################################
+        map50 = evaluate(model, ds_val_aims)
+        wandb.log({
+            'val/aims/map50': map50
+        })
+        ################################################
 
         # if i_iter % args.save_pred_every == 0 and i_iter != 0:
         print('taking snapshot ...')
