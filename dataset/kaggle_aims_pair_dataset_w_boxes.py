@@ -68,8 +68,8 @@ class kaggle_aims_pair_boxed(data.Dataset):
             T.ToTensor()
         ])
 
-        self.kaggle_root = "/mnt/storage/djamahl/data/Kaggle_1080_google_v1"
-        # self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
+        # self.kaggle_root = "/mnt/storage/djamahl/data/Kaggle_1080_google_v1"
+        self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
 
         # self.aims_root = "/home/etc004/code/YOLOX/AIMS_data_test"
         # self.aims_root = "/mnt/d61-visage-data/work/datasets/"
@@ -176,7 +176,7 @@ class kaggle_aims_pair_boxed(data.Dataset):
         # if aims is val/test -> give aims boxes for evaluation 
         if self.aims_split == "train.json":
             # so that we don't always pair the same aims / kaggle image
-            aims_index = np.random.randint(low=0, high=self.shortest_list)
+            aims_index = np.random.randint(low=0, high=len(self.aims_imgs_list))
             # kaggle_index = np.random.randint(low=0, high=self.shortest_list)
             kaggle_index = index
         else:
@@ -193,4 +193,4 @@ class kaggle_aims_pair_boxed(data.Dataset):
 
         aims_label = self.aims_imgs_list[aims_index]['label']
 
-        return self.transform_kaggle(kaggle_img), self.transform_aims(aims_img), image_id, torch.tensor(kaggle_label), torch.tensor(aims_label)
+        return self.transform_kaggle(kaggle_img), self.transform_aims(aims_img), image_id, torch.tensor(kaggle_label), torch.tensor(aims_label), self.aims_imgs_list[aims_index]['image_id']

@@ -21,6 +21,8 @@ from network.relighting import L_ColorInvarianceConv, Loss_bounds
 
 from evaluate import evaluate
 
+import PIL
+
 def lr_poly(base_lr, iter, max_iter, power):
     return base_lr * ((1 - float(iter) / max_iter) ** (power))
 
@@ -116,8 +118,12 @@ def main():
 
     # yolo model
     model = WrappedYOLO()
-    # model = nn.DataParallel(model)
     model.eval().to(device)
+
+    teacher = WrappedYOLO()
+    for p in teacher.parameters():
+        p.requires_grad = False
+    teacher.eval()
 
     if not os.path.exists(args.snapshot_dir):
         os.makedirs(args.snapshot_dir)
@@ -135,7 +141,17 @@ def main():
         optimizer_ld = optim.Adam(darknet.parameters(), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
 
     optimizer_model = optim.Adam(model.parameters(), lr=args.learning_rate_yolo, betas=(0.9, 0.99), weight_decay=args.weight_decay)
-    scheduler_model = optim.lr_scheduler.ReduceLROnPlateau(optimizer_model, 'max', patience=5)
+    # scheduler_model = optim.lr_scheduler.ReduceLROnPlateau(optimizer_model, 'max', patience=5)
+
+    train_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer_model, args.num_steps, eta_min=1e-4)
+
+    number_warmup_epochs = 5
+
+    def warmup(current_step: int):
+        return 1 / (10 ** (float(number_warmup_epochs - current_step)))
+    warmup_scheduler = optim.lr_scheduler.LambdaLR(optimizer_model, lr_lambda=warmup)
+
+    scheduler_model = optim.lr_scheduler.SequentialLR(optimizer_model, [warmup_scheduler, train_scheduler], [number_warmup_epochs])
     # from yang_model
     # optimizer_model = optim.SGD(model.backbone.parameters(), lr=0.005,momentum=0.937,weight_decay=0.0005)
 
@@ -148,11 +164,11 @@ def main():
     loss_TV = L_TV()
     loss_SSIM = SSIM()
     loss_bce = nn.BCEWithLogitsLoss()
-    loss_ci = L_ColorInvarianceConv(invariant='W')
 
     kaggle_label = 0.0
     aims_label = 1.0
 
+    # fixed from yang_model
     yolo_loss_weights = dict(
         loss_cls=0.22499999999999998,
         loss_bbox=0.037500000000000006,
@@ -164,7 +180,6 @@ def main():
         config=dict(
             # lightnet_ngf=lightnet.module.ngf,
             darknet_ngf=darknet.module.ngf,
-            color_invariant=loss_ci.invariant,
             discriminator=model_D.module._get_name(),
             lr_yolo=args.learning_rate_yolo,
             # lightnet=lightnet.module._get_name(),
@@ -181,7 +196,6 @@ def main():
         'val/aims/map50': map50,
         'lr': optimizer_model.param_groups[0]['lr']
     })
-    scheduler_model.step(map50)
     ################################################
 
     for i_iter in range(args.num_steps):
@@ -190,7 +204,7 @@ def main():
         optimizer_D.zero_grad()
 
         j = 0
-        for images_kaggle, images_aims, image_ids, labels_kaggle, labels_aims in tqdm(trainloader, desc="Batch"):
+        for images_kaggle, images_aims, image_ids, labels_kaggle, labels_aims, aims_img_ids in tqdm(trainloader, desc="Batch"):
             images_aims = images_aims.to(device)
             images_kaggle = images_kaggle.to(device)
             mean_light = images_kaggle.mean()
@@ -223,7 +237,6 @@ def main():
 
             # kaggle -> aims
             r = darknet(images_kaggle)
-            # print("images kaggle dev", images_kaggle.device, r.device)
             darker_images_kaggle = images_kaggle + r
 
             # D with REAL aims
@@ -284,35 +297,31 @@ def main():
                 aims_brightening = r
                 brighter_images_aims = images_aims + r 
 
-                loss_ci_aims_brighten = loss_ci(brighter_images_aims, images_aims)
                 loss_brighten_aims = 10*loss_TV(r)+torch.mean(loss_SSIM(brighter_images_aims, images_aims))\
-                    + 5*torch.mean(loss_exp_z(brighter_images_aims, mean_light)) + 0.0*loss_ci_aims_brighten
+                    + 5*torch.mean(loss_exp_z(brighter_images_aims, mean_light))
 
             # kaggle -> aims
             r = darknet(images_kaggle)
             kaggle_darkening = r
             darker_images_kaggle = images_kaggle + r 
 
-            loss_ci_kaggle_darken = loss_ci(darker_images_kaggle, images_aims)
             loss_darken_kaggle = 10*loss_TV(r)+torch.mean(loss_SSIM(darker_images_kaggle, images_aims))\
-                 + 5*torch.mean(loss_exp_z(darker_images_kaggle, mean_dark)) + 0.0*loss_ci_kaggle_darken
+                 + 5*torch.mean(loss_exp_z(darker_images_kaggle, mean_dark))
 
             if args.lightnet:
                 # kaggle -> kaggle
                 r = lightnet(images_kaggle)
                 brighter_images_kaggle = images_kaggle + r 
 
-                loss_ci_kaggle_brighten = loss_ci(brighter_images_kaggle, images_kaggle)
                 loss_brighten_kaggle = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(brighter_images_kaggle, images_kaggle))\
-                                + 5*torch.mean(loss_exp_z(brighter_images_kaggle, mean_light)) + 0.0*loss_ci_kaggle_brighten
+                                + 5*torch.mean(loss_exp_z(brighter_images_kaggle, mean_light))
 
             # aims -> aims
             r = darknet(images_aims)
             darker_images_aims = images_aims + r 
 
-            loss_ci_aims_darken = loss_ci(darker_images_aims, images_aims)
             loss_darken_aims = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(darker_images_aims, images_aims))\
-                            + 5*torch.mean(loss_exp_z(darker_images_aims, mean_dark)) + 0.0*loss_ci_aims_darken
+                            + 5*torch.mean(loss_exp_z(darker_images_aims, mean_dark))
 
             if args.lightnet:
                 loss_enhancement = loss_brighten_aims + loss_darken_kaggle + loss_brighten_kaggle + loss_darken_aims
@@ -358,7 +367,7 @@ def main():
             optimizer_ld.step()
 
             ########################################################################################################
-            # Train yolo on kaggle / darker kaggle################################################################
+            # Supervised training of yolo on kaggle / darker kaggle#################################################
             ########################################################################################################
             if args.lightnet:
                 for p in lightnet.parameters():
@@ -403,8 +412,8 @@ def main():
                         gt_instances[box_i, :] = torch.tensor([float(i), 1.0, *box], dtype=torch.float32)
                         box_i += 1
 
-            # losses_kaggle = model(images_kaggle, instance_datas=gt_instances.clone().to(device, dtype=torch.float32), img_metas=img_metas)
-            losses_kaggle = {'loss_cls': 0, 'loss_obj': 0, 'loss_bbox': 0}
+            losses_kaggle = model(images_kaggle, instance_datas=gt_instances.clone().to(device, dtype=torch.float32), img_metas=img_metas)
+            # losses_kaggle = {'loss_cls': 0, 'loss_obj': 0, 'loss_bbox': 0}
 
             losses_darker_kaggle = model(darker_images_kaggle, instance_datas=gt_instances.clone().to(device, dtype=torch.float32), img_metas=img_metas)
 
@@ -417,7 +426,7 @@ def main():
             losses_darker_kaggle['loss_obj'] *= yolo_loss_weights['loss_obj']
 
             loss_yolo_kaggle = losses_kaggle['loss_cls'] + losses_kaggle['loss_obj'] + losses_kaggle['loss_bbox']
-            loss_yolo_kaggle = torch.tensor(0)
+            # loss_yolo_kaggle = torch.tensor(0)
             loss_yolo_kaggle_dark = losses_darker_kaggle['loss_cls'] + losses_darker_kaggle['loss_obj'] + losses_darker_kaggle['loss_bbox']
 
             loss_yolo = loss_yolo_kaggle + loss_yolo_kaggle_dark
@@ -432,56 +441,47 @@ def main():
             loss.backward()
             optimizer_model.step()
 
-            # boxes, scores = model.forward_pred_no_grad(images_kaggle[0].unsqueeze(0))
-            # boxes = boxes.flatten(0,1)
-            # scores = scores.flatten(0,1)
+            ########################################################################################################
+            # Pseudo-labeling training on aims (dark) dataset      #################################################
+            ########################################################################################################
+            boxes, scores = teacher.forward_pred_no_grad(images_aims)
+            num_boxes = sum(len(x) for x in boxes)
+            gt_instances_pseudo = torch.zeros((num_boxes, 6), dtype=torch.float32)
 
-            # print("boxes sores",  boxes, scores)
-            # p_min = lambda x: 0 if x.numel() == 0 else (x.min(), x.max())
-            # print("gt_instances 374", gt_instances, p_min(gt_instances))
-            # print("gt_instances_orig 375", gt_instances_orig)
+            loss_yolo_pseudo = torch.tensor([0])
 
-            # if boxes.numel() > 0 and gt_instances_orig.numel() > 0:
-            #     import matplotlib.pyplot as plt
-            #     from matplotlib.patches import Rectangle
+            # if num_boxes > 0:
+            box_i = 0
+            for i in range(len(images_aims)):
+                bboxes = boxes[i]
+                for box in bboxes:
+                    assert box[0::2].max() <= ds.size[1] and box[1::2].max() <= ds.size[0]
+                    gt_instances_pseudo[box_i, :] = torch.tensor([float(i), 1.0, *box], dtype=torch.float32)
+                    box_i += 1
 
-            #     #### PLOTTING
-            #     plt.figure(figsize=(20,20))
-            #     #define Matplotlib figure and axis
-            #     # fig, ax = plt.subplots()
-            #     ax = plt.subplot(1,1,1)
+            h, w = images_kaggle.shape[-2:]
+            img_metas = [dict(ori_shape=(h, w), scale_factor=1, batch_input_shape=(h,w)) for i in range(len(images_kaggle))]
+            losses_pseudolabeling = model(images_aims, instance_datas=gt_instances_pseudo.clone().to(device, dtype=torch.float32), img_metas=img_metas)
 
-            #     ax.imshow(images_kaggle[0].permute(1, 2, 0).detach().cpu().numpy())
+            print("losses", losses_pseudolabeling)
 
-            #     line_styles = ['-', '--', '-.', ':']
+            losses_pseudolabeling['loss_cls'] *= yolo_loss_weights['loss_cls']
+            losses_pseudolabeling['loss_bbox'] *= yolo_loss_weights['loss_bbox']
+            losses_pseudolabeling['loss_obj'] *= yolo_loss_weights['loss_obj']
 
-            #     box_num = 0
+            loss_yolo_pseudo = losses_pseudolabeling['loss_cls'] + losses_pseudolabeling['loss_obj'] + losses_pseudolabeling['loss_bbox']
 
-            #     for i, bbox in enumerate(boxes):
-            #         score = scores[i]
-            #         print("ibox", i, bbox, score)
-                    
+            loss = loss_yolo_pseudo
+            loss.backward()
+            optimizer_model.step()
 
-            #         bbox = xyxy2matplotlibxywh(bbox)
+            p_min = lambda x: 0 if x.numel() == 0 else (x.min(), x.max())
 
-            #         label = "pred"
-
-            #         #add rectangle to plot
-            #         ax.add_patch(Rectangle((bbox[0], bbox[1]), bbox[2], bbox[3], alpha=1, fill=False, lw=1, label=label, color=[c/255 for c in PALETTE[box_num]]))
-            #         box_num += 1
-
-            #     for i in range(gt_instances_orig.shape[0]):
-            #         bbox = gt_instances_orig[i, 2:]
-            #         bbox = xyxy2matplotlibxywh(bbox)
-            #         label = "GT"
-            #         #add rectangle to plot
-            #         ax.add_patch(Rectangle((bbox[0], bbox[1]), bbox[2], bbox[3], alpha=1, fill=False, lw=1, label=label, color=[c/255 for c in PALETTE[box_num]]))
-            #         box_num += 1
-                
-            #     plt.legend()
-            #     plt.savefig("inference.png")
-
-            #     exit()
+            # EMA update for the teacher
+            with torch.no_grad():
+                m = args.momentum_teacher  # momentum parameter
+                for param_q, param_k in zip(model.parameters(), teacher.parameters()):
+                    param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
 
             # predictions
             if j == len(trainloader) - 1 or j == 0 or j % 1000 == 0:
@@ -489,7 +489,6 @@ def main():
                 #print_img_stats = lambda image: print("min max", image.min(), image.max())
 
                 def print_img_stats(img):
-
                     print("min max", img.min(), img.max())
                     img = np.clip(img, a_min=0, a_max=1)
                     return img
@@ -520,6 +519,7 @@ def main():
 
             wandb.log({
                 'iter': i_iter,
+                'loss/yolo_pseudo': loss_yolo_pseudo.item(),
                 'loss/yolo': loss_yolo.item(),
                 'loss/yolo_kaggle': 0 if type(loss_yolo_kaggle) != torch.tensor else loss_yolo_kaggle.item(),
                 'loss/yolo_kaggle_dark': loss_yolo_kaggle_dark.item(),

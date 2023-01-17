@@ -1,6 +1,6 @@
 import argparse
 
-MODEL = 'PSPNet'  # PSPNet, DeepLab, RefineNet
+MODEL = 'yolo'  # PSPNet, DeepLab, RefineNet
 RESTORE_FROM = './pretrained_models/pretrain_pspnet_150000.pth'
 
 BATCH_SIZE = 1
@@ -24,6 +24,8 @@ POWER = 0.9
 MOMENTUM = 0.9
 WEIGHT_DECAY = 0.0005
 LEARNING_RATE_D = 1e-4
+MOMENTUM_TEACHER = 0.9995
+TEMPERATURE_TEACHER = 0.04
 
 NUM_STEPS = 50000
 SAVE_PRED_EVERY = 1
@@ -61,6 +63,10 @@ def get_arguments():
                         help="Base learning rate for discriminator.")
     parser.add_argument("--learning-rate-yolo", type=float, default=LEARNING_RATE_YOLO,
                         help="Base learning rate for yolo.")
+    parser.add_argument("--momentum-teacher", type=float, default=MOMENTUM_TEACHER,
+                        help="EMA momentum for yolo teacher")
+    parser.add_argument("--temperature-teacher", type=float, default=TEMPERATURE_TEACHER,
+                        help="Temperature for yolo teacher")
     parser.add_argument("--momentum", type=float, default=MOMENTUM,
                         help="Momentum component of the optimiser.")
     parser.add_argument("--num-classes", type=int, default=NUM_CLASSES,
