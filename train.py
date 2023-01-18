@@ -85,21 +85,21 @@ def main():
     cudnn.enabled = True
     cudnn.benchmark = True
 
-    if args.lightnet:
-        lightnet = LightNet() # aims -> kaggle
+    lightnet = LightNet() # aims -> kaggle
     darknet = LightNet() # kaggle -> aims
-    saved_state_dict = torch.load("snapshots/PSPNet/fluent-morning-24_dark_latest.pth")
+    init_weights(lightnet)
+    init_weights(darknet)
 
-    if args.lightnet:
-        lightnet = nn.DataParallel(lightnet)
+    # saved_state_dict = torch.load("snapshots/yolo/dutiful-wave-41_dark_latest.pth")
+
+    # lightnet = nn.DataParallel(lightnet)
         # lightnet.load_state_dict(saved_state_dict)
 
-    darknet = nn.DataParallel(darknet)
-    darknet.load_state_dict(saved_state_dict)
+    # darknet = nn.DataParallel(darknet)
+    # darknet.load_state_dict(saved_state_dict)
 
-    if args.lightnet:
-        lightnet.train()
-        lightnet.to(device)
+    lightnet.train()
+    lightnet.to(device)
     
     darknet.train()
     darknet.to(device)
@@ -107,8 +107,8 @@ def main():
     # model_D = FCDiscriminator(num_classes=3) # classes = num input channels    
     model_D = NLayerDiscriminator(input_nc=3, ndf=64, n_layers=3) # classes = num input channels    
     init_weights(model_D)
-    model_D = nn.DataParallel(model_D)
-    saved_state_dict = torch.load("snapshots/PSPNet/fluent-morning-24_d_latest.pth")
+    # model_D = nn.DataParallel(model_D)
+    # saved_state_dict = torch.load("snapshots/yolo/dutiful-wave-41_d_latest.pth")
     # print(saved_state_dict.keys())
     # model_D.load_state_dict(saved_state_dict)
     # exit()
@@ -119,6 +119,10 @@ def main():
     # yolo model
     model = WrappedYOLO()
     model.eval().to(device)
+
+    clip_value = 1.0
+    for p in model.parameters():
+        p.register_hook(lambda grad: torch.clamp(grad, -clip_value, clip_value))
 
     teacher = WrappedYOLO()
     for p in teacher.parameters():
@@ -135,29 +139,32 @@ def main():
 
     ds_val_aims = kaggle_aims_pair_boxed(aims_split="val.json")
 
-    if args.lightnet:
-        optimizer_ld = optim.Adam(list(lightnet.parameters()) + list(darknet.parameters()) + list(model.parameters()), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
-    else:
-        optimizer_ld = optim.Adam(darknet.parameters(), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
+    # if args.lightnet:
+    #     optimizer_ld = optim.Adam(list(lightnet.parameters()) + list(darknet.parameters()) + list(model.parameters()), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
+    # else:
+    
+    optimizer_dark = optim.Adam(darknet.parameters(), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
+    optimizer_light = optim.Adam(lightnet.parameters(), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
 
     optimizer_model = optim.Adam(model.parameters(), lr=args.learning_rate_yolo, betas=(0.9, 0.99), weight_decay=args.weight_decay)
     # scheduler_model = optim.lr_scheduler.ReduceLROnPlateau(optimizer_model, 'max', patience=5)
 
-    train_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer_model, args.num_steps, eta_min=1e-4)
+    train_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer_model, args.num_steps, eta_min=1e-5)
 
     number_warmup_epochs = 5
 
     def warmup(current_step: int):
         return 1 / (10 ** (float(number_warmup_epochs - current_step)))
-    warmup_scheduler = optim.lr_scheduler.LambdaLR(optimizer_model, lr_lambda=warmup)
+    scheduler_model = optim.lr_scheduler.LambdaLR(optimizer_model, lr_lambda=warmup)
 
-    scheduler_model = optim.lr_scheduler.SequentialLR(optimizer_model, [warmup_scheduler, train_scheduler], [number_warmup_epochs])
+    # scheduler_model = optim.lr_scheduler.SequentialLR(optimizer_model, [warmup_scheduler, train_scheduler], [number_warmup_epochs])
     # from yang_model
     # optimizer_model = optim.SGD(model.backbone.parameters(), lr=0.005,momentum=0.937,weight_decay=0.0005)
 
     optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9, 0.99))
     optimizer_D.zero_grad()
-    optimizer_ld.zero_grad()
+    optimizer_dark.zero_grad()
+    optimizer_light.zero_grad()
     optimizer_model.zero_grad()
 
     loss_exp_z = L_exp_z(32)
@@ -177,14 +184,16 @@ def main():
 
     wandb.init(
         project="DANNet YOLO DA",
+        # name="no-pseudo",
         config=dict(
             # lightnet_ngf=lightnet.module.ngf,
-            darknet_ngf=darknet.module.ngf,
-            discriminator=model_D.module._get_name(),
+            darknet_ngf=darknet.ngf,
+            discriminator=model_D._get_name(),
             lr_yolo=args.learning_rate_yolo,
             # lightnet=lightnet.module._get_name(),
-            darknet=darknet.module._get_name(),
-            yolo_loss_weights=yolo_loss_weights
+            darknet=darknet._get_name(),
+            yolo_loss_weights=yolo_loss_weights,
+            score_thres=args.teacher_score_thresh
         )
     )
 
@@ -199,9 +208,6 @@ def main():
     ################################################
 
     for i_iter in range(args.num_steps):
-        optimizer_model.zero_grad()
-        optimizer_ld.zero_grad()
-        optimizer_D.zero_grad()
 
         j = 0
         for images_kaggle, images_aims, image_ids, labels_kaggle, labels_aims, aims_img_ids in tqdm(trainloader, desc="Batch"):
@@ -215,9 +221,9 @@ def main():
             ########################################################################################################
             # DISCRIMINATOR 
             ########################################################################################################
-            if args.lightnet:
-                for p in lightnet.parameters():
-                    p.requires_grad_(False)
+
+            for p in lightnet.parameters():
+                p.requires_grad_(False)
 
             for p in darknet.parameters():
                 p.requires_grad_(False)
@@ -229,11 +235,10 @@ def main():
             model_D.zero_grad()
             #model.zero_grad()
 
-            if args.lightnet:
-                # aims -> kaggle
-                r = lightnet(images_aims)
-                # r = r.to(device)
-                brighter_images_aims = images_aims + r 
+            # aims -> kaggle
+            r = lightnet(images_aims)
+            # r = r.to(device)
+            brighter_images_aims = images_aims + r 
 
             # kaggle -> aims
             r = darknet(images_kaggle)
@@ -244,10 +249,9 @@ def main():
             D_label_d = torch.FloatTensor(D_out_d.data.size()).fill_(aims_label).to(device)
             loss_adv_real_aims = loss_bce(D_out_d, D_label_d)
 
-            if args.lightnet:
-                # D with enhanced aims
-                D_out_d = model_D(brighter_images_aims)
-                loss_adv_brighter_aims = loss_bce(D_out_d, D_label_d)
+            # D with enhanced aims
+            D_out_d = model_D(brighter_images_aims)
+            loss_adv_brighter_aims = loss_bce(D_out_d, D_label_d)
 
             # D with REAL kaggle
             D_out_d = model_D(images_kaggle)
@@ -258,10 +262,7 @@ def main():
             D_out_d = model_D(darker_images_kaggle)
             loss_adv_darker_kaggle = loss_bce(D_out_d, D_label_d)
 
-            if args.lightnet:
-                loss = loss_adv_real_aims + loss_adv_real_kaggle + loss_adv_brighter_aims + loss_adv_darker_kaggle
-            else:
-                loss = loss_adv_real_aims + loss_adv_real_kaggle + loss_adv_darker_kaggle
+            loss = loss_adv_real_aims + loss_adv_real_kaggle + loss_adv_brighter_aims + loss_adv_darker_kaggle
 
             loss_D_log = loss.item()
             
@@ -269,12 +270,76 @@ def main():
             optimizer_D.step()
 
             ########################################################################################################
-            # LIGHTNET & DARKNET
+            # LIGHTNET
             ########################################################################################################
-            if args.lightnet:
-                for p in lightnet.parameters():
-                    p.requires_grad_(True)
-                lightnet.train()
+            for p in lightnet.parameters():
+                p.requires_grad_(True)
+            for p in darknet.parameters():
+                p.requires_grad_(False)
+            for p in model.parameters():
+                p.requires_grad_(False)
+            for p in model_D.parameters():
+                p.requires_grad_(False)
+            model.eval()
+            model_D.eval()
+            darknet.eval()            
+            lightnet.train()
+
+            lightnet.zero_grad()
+            optimizer_light.zero_grad()
+
+            # aims -> kaggle
+            r = lightnet(images_aims)
+            aims_brightening = r
+            brighter_images_aims = images_aims + r 
+
+            loss_brighten_aims = 10*loss_TV(r)+torch.mean(loss_SSIM(brighter_images_aims, images_aims))\
+                + 5*torch.mean(loss_exp_z(brighter_images_aims, mean_light))
+
+            # kaggle -> kaggle
+            r = lightnet(images_kaggle)
+            brighter_images_kaggle = images_kaggle + r 
+
+            loss_brighten_kaggle = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(brighter_images_kaggle, images_kaggle))\
+                            + 5*torch.mean(loss_exp_z(brighter_images_kaggle, mean_light))
+
+            # kaggle -> aims -> kaggle (cycle)
+            cycle_images_kaggle = images_kaggle + lightnet(images_kaggle + darknet(images_kaggle))
+            loss_brighten_cycle = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(cycle_images_kaggle, images_kaggle))\
+                            + 5*torch.mean(loss_exp_z(cycle_images_kaggle, mean_light))
+
+            loss_enhancement = loss_brighten_aims + loss_brighten_kaggle + loss_brighten_cycle
+            ########################################################################################################
+            # ADVERSARIAL Lightnet########################################################################
+            ########################################################################################################
+            # Discriminator on aims -> kaggle
+            D_out_d_brighten_aims = model_D(brighter_images_aims)
+
+            D_label_d_aims = torch.FloatTensor(D_out_d_brighten_aims.data.size()).fill_(aims_label).to(device) 
+            D_label_d_kaggle = torch.FloatTensor(D_out_d_brighten_aims.data.size()).fill_(kaggle_label).to(device) 
+
+            loss_adv_brighten_aims = loss_bce(D_out_d_brighten_aims, D_label_d_kaggle)
+            
+            # Discriminator on kaggle -> kaggle
+            D_out_d_brighten_kaggle = model_D(brighter_images_kaggle)
+            loss_adv_brighten_kaggle = loss_bce(D_out_d_brighten_kaggle, D_label_d_kaggle)
+
+            D_out_d_cycle = model_D(cycle_images_kaggle)
+            loss_adv_brighten_cycle = loss_bce(D_out_d_cycle, D_label_d_kaggle)
+
+
+            loss_adv = loss_adv_brighten_aims + loss_adv_brighten_kaggle + loss_adv_brighten_cycle
+            
+            loss = loss_enhancement + loss_adv
+            lightnet_loss = loss.item()
+            loss.backward()
+            optimizer_light.step()
+
+            ########################################################################################################
+            # Darknet
+            ########################################################################################################
+            for p in lightnet.parameters():
+                p.requires_grad_(False)
             for p in darknet.parameters():
                 p.requires_grad_(True)
             for p in model.parameters():
@@ -283,22 +348,11 @@ def main():
                 p.requires_grad_(False)
             model.eval()
             model_D.eval()
-            darknet.train()            
+            darknet.eval()            
+            lightnet.eval()
 
-            if args.lightnet:
-                lightnet.zero_grad()
             darknet.zero_grad()
-            # model.zero_grad()
-            optimizer_ld.zero_grad()
-
-            if args.lightnet:
-                # aims -> kaggle
-                r = lightnet(images_aims)
-                aims_brightening = r
-                brighter_images_aims = images_aims + r 
-
-                loss_brighten_aims = 10*loss_TV(r)+torch.mean(loss_SSIM(brighter_images_aims, images_aims))\
-                    + 5*torch.mean(loss_exp_z(brighter_images_aims, mean_light))
+            optimizer_dark.zero_grad()
 
             # kaggle -> aims
             r = darknet(images_kaggle)
@@ -308,14 +362,6 @@ def main():
             loss_darken_kaggle = 10*loss_TV(r)+torch.mean(loss_SSIM(darker_images_kaggle, images_aims))\
                  + 5*torch.mean(loss_exp_z(darker_images_kaggle, mean_dark))
 
-            if args.lightnet:
-                # kaggle -> kaggle
-                r = lightnet(images_kaggle)
-                brighter_images_kaggle = images_kaggle + r 
-
-                loss_brighten_kaggle = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(brighter_images_kaggle, images_kaggle))\
-                                + 5*torch.mean(loss_exp_z(brighter_images_kaggle, mean_light))
-
             # aims -> aims
             r = darknet(images_aims)
             darker_images_aims = images_aims + r 
@@ -323,32 +369,19 @@ def main():
             loss_darken_aims = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(darker_images_aims, images_aims))\
                             + 5*torch.mean(loss_exp_z(darker_images_aims, mean_dark))
 
-            if args.lightnet:
-                loss_enhancement = loss_brighten_aims + loss_darken_kaggle + loss_brighten_kaggle + loss_darken_aims
-            else:
-                loss_enhancement = loss_darken_kaggle + loss_darken_aims
+            # aims -> kaggle -> aims (cycle)
+            cycle_images_aims = images_aims + darknet(images_aims + lightnet(images_aims))
+            loss_darken_cycle = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(cycle_images_aims, images_aims))\
+                            + 5*torch.mean(loss_exp_z(cycle_images_aims, mean_dark))
+
+            loss_enhancement = loss_darken_kaggle + loss_darken_aims + loss_darken_cycle
             ########################################################################################################
-            # ADVERSARIAL Lightnet & Darknet########################################################################
+            # ADVERSARIAL Darknet           ########################################################################
             ########################################################################################################
-
-            if args.lightnet:
-                # Discriminator on aims -> kaggle
-                D_out_d_brighten_aims = model_D(brighter_images_aims)
-
-                D_label_d_aims = torch.FloatTensor(D_out_d_brighten_aims.data.size()).fill_(aims_label).to(device) 
-                D_label_d_kaggle = torch.FloatTensor(D_out_d_brighten_aims.data.size()).fill_(kaggle_label).to(device) 
-
-                loss_adv_brighten_aims = loss_bce(D_out_d_brighten_aims, D_label_d_kaggle)
-                
-                # Discriminator on kaggle -> kaggle
-                D_out_d_brighten_kaggle = model_D(brighter_images_kaggle)
-                loss_adv_brighten_kaggle = loss_bce(D_out_d_brighten_kaggle, D_label_d_kaggle)
-
             # Discriminator on kaggle -> aims
             D_out_d_darken_kaggle = model_D(darker_images_kaggle)
 
-            if not args.lightnet:
-                D_label_d_aims = torch.FloatTensor(D_out_d_darken_kaggle.data.size()).fill_(aims_label).to(device) 
+            D_label_d_aims = torch.FloatTensor(D_out_d_darken_kaggle.data.size()).fill_(aims_label).to(device) 
 
             loss_adv_darker_aims = loss_bce(D_out_d_darken_kaggle, D_label_d_aims)
             
@@ -356,23 +389,25 @@ def main():
             D_out_d_darken_aims = model_D(darker_images_aims)
             loss_adv_darker_kaggle = loss_bce(D_out_d_darken_aims, D_label_d_aims)
 
-            if args.lightnet:
-                loss_adv = loss_adv_brighten_aims + loss_adv_brighten_kaggle + loss_adv_darker_kaggle + loss_adv_darker_aims
-            else:
-                loss_adv = loss_adv_darker_kaggle + loss_adv_darker_aims
+            # discriminator on cycle
+            D_out_d_darken_cycle = model_D(cycle_images_aims)
+            loss_adv_darker_cycle = loss_bce(D_out_d_darken_cycle, D_label_d_aims)
+
+            loss_adv = loss_adv_darker_kaggle + loss_adv_darker_aims + loss_adv_darker_cycle
 
             loss = loss_adv + loss_enhancement
+
+            darknet_loss = loss.item()
             
             loss.backward()
-            optimizer_ld.step()
+            optimizer_dark.step()
 
             ########################################################################################################
             # Supervised training of yolo on kaggle / darker kaggle#################################################
             ########################################################################################################
-            if args.lightnet:
-                for p in lightnet.parameters():
-                    p.requires_grad_(False)
-                lightnet.eval()
+            for p in lightnet.parameters():
+                p.requires_grad_(False)
+            lightnet.eval()
             for p in darknet.parameters():
                 p.requires_grad_(False)
             for p in model.backbone.parameters():
@@ -436,21 +471,31 @@ def main():
             loss_bbox = losses_kaggle['loss_bbox'] + losses_darker_kaggle['loss_bbox'] 
             ###########################################################################################
 
-            loss = loss_yolo
+            # loss = loss_yolo
             
-            loss.backward()
-            optimizer_model.step()
+            # loss.backward()
+            # optimizer_model.step()
 
             ########################################################################################################
             # Pseudo-labeling training on aims (dark) dataset      #################################################
             ########################################################################################################
+            boxes_bright, scores_bright = teacher.forward_pred_no_grad(brighter_images_aims)
             boxes, scores = teacher.forward_pred_no_grad(images_aims)
+
+            boxes = [torch.cat((boxes[i], boxes_bright[i]), dim=0) for i in range(len(boxes))]
+            scores = [torch.cat((scores[i], scores_bright[i]), dim=0) for i in range(len(boxes))]
+
+            # filter out by score threshold
+            inds = [ss > 0.5 for ss in scores]
+            boxes = [img_boxes[inds[i]] for i, img_boxes in enumerate(boxes)]
+            scores = [img_scores[inds[i]] for i, img_scores in enumerate(scores)]
+
             num_boxes = sum(len(x) for x in boxes)
+
             gt_instances_pseudo = torch.zeros((num_boxes, 6), dtype=torch.float32)
 
             loss_yolo_pseudo = torch.tensor([0])
 
-            # if num_boxes > 0:
             box_i = 0
             for i in range(len(images_aims)):
                 bboxes = boxes[i]
@@ -463,15 +508,15 @@ def main():
             img_metas = [dict(ori_shape=(h, w), scale_factor=1, batch_input_shape=(h,w)) for i in range(len(images_kaggle))]
             losses_pseudolabeling = model(images_aims, instance_datas=gt_instances_pseudo.clone().to(device, dtype=torch.float32), img_metas=img_metas)
 
-            print("losses", losses_pseudolabeling)
-
             losses_pseudolabeling['loss_cls'] *= yolo_loss_weights['loss_cls']
             losses_pseudolabeling['loss_bbox'] *= yolo_loss_weights['loss_bbox']
             losses_pseudolabeling['loss_obj'] *= yolo_loss_weights['loss_obj']
 
-            loss_yolo_pseudo = losses_pseudolabeling['loss_cls'] + losses_pseudolabeling['loss_obj'] + losses_pseudolabeling['loss_bbox']
 
-            loss = loss_yolo_pseudo
+            loss_yolo_pseudo = losses_pseudolabeling['loss_obj'] + losses_pseudolabeling['loss_bbox']
+
+            # backward with both supervised loss and unsupervised loss
+            loss = 0.2*loss_yolo_pseudo + loss_yolo
             loss.backward()
             optimizer_model.step()
 
@@ -495,46 +540,49 @@ def main():
 
                 log_images = lambda images: [wandb.Image(print_img_stats(images[i].permute(1,2,0).detach().cpu().numpy())) for i in range(images.shape[0])]
                 # 
-                # aims_table = wandb.Table(columns=[], data=[])
-                # aims_table.add_column("aims", data=log_images(images_aims))
-                # aims_table.add_column("darker", log_images(darker_images_aims))
-                # if args.lightnet:
-                    # aims_table.add_column("brighter", log_images(brighter_images_aims))
+                aims_table = wandb.Table(columns=[], data=[])
+                aims_table.add_column("aims", data=log_images(images_aims))
+                aims_table.add_column("darker", log_images(darker_images_aims))
+                aims_table.add_column("cycle", log_images(cycle_images_aims))
+
+                aims_table.add_column("brighter", log_images(brighter_images_aims))
                 # aims_table.add_column("cots", labels_aims.detach().cpu().numpy())
 
                 kaggle_table = wandb.Table(columns=[], data=[])
 
                 kaggle_table.add_column("kaggle", data=log_images(images_kaggle))
                 kaggle_table.add_column("darker", log_images(darker_images_kaggle))
-                if args.lightnet:
-                    kaggle_table.add_column("brighter", log_images(brighter_images_kaggle))
+                kaggle_table.add_column("cycle", log_images(cycle_images_kaggle))
+                kaggle_table.add_column("brighter", log_images(brighter_images_kaggle))
                 # kaggle_table.add_column("D(enhanced) aims=1", D_out_d_kaggle.mean(dim=(1,2,3)).detach().cpu().numpy())
                 kaggle_table.add_column("cots", labels_kaggle.detach().cpu().numpy())
                 # kaggle_table.add_column("P(cots)", pred_labels.sum(1).detach().cpu().numpy())
 
-                # wandb.log({'aims_table': aims_table, 'kaggle_table': kaggle_table})
-                wandb.log({'kaggle_table': kaggle_table})
+                wandb.log({'aims_table': aims_table, 'kaggle_table': kaggle_table})
+                # wandb.log({'kaggle_table': kaggle_table})
 
             j += 1
 
             wandb.log({
                 'iter': i_iter,
-                'loss/yolo_pseudo': loss_yolo_pseudo.item(),
+                # 'loss/yolo_pseudo': loss_yolo_pseudo.item(),
                 'loss/yolo': loss_yolo.item(),
-                'loss/yolo_kaggle': 0 if type(loss_yolo_kaggle) != torch.tensor else loss_yolo_kaggle.item(),
+                'loss/yolo_kaggle': loss_yolo_kaggle.item(),
                 'loss/yolo_kaggle_dark': loss_yolo_kaggle_dark.item(),
-                'loss/enhance': loss_enhancement.item(),
+                # 'loss/enhance': loss_enhancement.item(),
                 'loss/discriminator': loss_D_log,
                 'loss/cls': loss_cls.item(),
                 'loss/bbox': loss_bbox.item(),
                 'loss/obj': loss_obj.item(),
-                'loss/adversarial': loss_adv.item()
+                # 'loss/adversarial': loss_adv.item()
+                'loss/dark': darknet_loss,
+                'loss/bright': lightnet_loss
             })
 
             if j % 1000 == 0:
                 # Validation ###################################
                 map50 = evaluate(model, ds_val_aims)
-                scheduler_model.step(map50)
+                scheduler_model.step()
                 wandb.log({
                     'val/aims/map50': map50,
                     'lr': optimizer_model.param_groups[0]['lr']

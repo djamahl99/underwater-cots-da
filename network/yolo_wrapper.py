@@ -46,15 +46,14 @@ class WrappedYOLO(nn.Module):
             bboxes_ = []
             scores_ = []
             for j in range(len(preds[i]['bboxes'])):
-                bboxes_.append(preds[i]['bboxes'][j].detach().cpu().numpy())
-                scores_.append(preds[i]['scores'][j].item())
+                if preds[i]['bboxes'][j].numel() > 0:
+                    bboxes_.append(preds[i]['bboxes'][j].detach().cpu().numpy())
+                    scores_.append(preds[i]['scores'][j].item())
+            # if len(bboxes_) > 0:
             bboxes.append(bboxes_)
             scores.append(scores_)
-
-        # print("bboxes-", bboxes)
-        # print("scores-", scores)
-        bboxes = torch.tensor(bboxes)
-        scores = torch.tensor(scores)
+        bboxes = [torch.tensor(b) for b in bboxes]
+        scores = [torch.tensor(s) for s in scores]
 
         return bboxes, scores
 
