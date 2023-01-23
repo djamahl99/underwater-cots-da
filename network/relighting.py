@@ -210,6 +210,115 @@ class GammaLightNet(nn.Module):
 
         return gamma_correction - x
 
+from torchvision.models import resnet34, ResNet34_Weights
+class ResNetColorCorrector(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.resnet = resnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
+
+        resnet_out_dim = 1000
+
+        ff_dim = 256
+
+        self.contrast = nn.Sequential(
+            nn.Linear(resnet_out_dim, ff_dim),
+            nn.GELU(),
+            nn.Linear(ff_dim, ff_dim),
+            nn.GELU(),
+            nn.Linear(ff_dim, 3),
+            nn.Sigmoid()
+        )
+
+        self.brightness = nn.Sequential(
+            nn.Linear(resnet_out_dim, ff_dim),
+            nn.GELU(),
+            nn.Linear(ff_dim, ff_dim),
+            nn.GELU(),
+            nn.Linear(ff_dim, 3)
+        )
+
+    def forward(self, x):
+        image = x
+        b = image.shape[0]
+
+        x = self.resnet(x)
+        con = self.contrast(x)
+        br = self.brightness(x)
+
+        con = con.reshape(b, 3, 1, 1)
+        br = br.reshape(b, 3, 1, 1)
+
+        con = torch.clamp(con, 0.01)
+        adj_image = (image + br) * con
+
+        residual = adj_image - image 
+
+        return residual
+
+import torchvision
+class ResNetColorCorrector2(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+        # resnet = resnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
+
+        # self.resnet = nn.Sequential(
+        #     resnet.conv1,
+        #     resnet.bn1,
+        #     resnet.relu,
+        #     resnet.maxpool,
+        #     #
+        #     resnet.layer1,
+        #     resnet.layer2,
+        #     resnet.layer3,
+        #     resnet.layer4
+        #     # 
+        # )
+
+        self.resnet = ResnetGenerator(3, 32, 32, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=3)
+
+        # resnet.layer4.
+
+        l4_out_dim = 32
+
+        # ff_dim = 256
+
+        self.contrast = nn.Sequential(
+            # nn.Conv2d(l4_out_dim, l4_out_dim, 7, stride=1),
+            # nn.ReLU(),
+            # nn.Conv2d(l4_out_dim, l4_out_dim, 3, stride=1),
+            # nn.ReLU(),
+            nn.Conv2d(l4_out_dim, 3, 3, stride=1),
+            nn.Sigmoid()
+        )
+
+        self.brightness = nn.Sequential(
+            # nn.Conv2d(l4_out_dim, l4_out_dim, 7, stride=1),
+            # nn.ReLU(),
+            # nn.Conv2d(l4_out_dim, l4_out_dim, 3, stride=1),
+            # nn.ReLU(),
+            nn.Conv2d(l4_out_dim, 3, 3, stride=1),
+        )
+
+    def forward(self, x):
+        image = x
+        b = image.shape[0]
+
+        x = self.resnet(x)
+        con = self.contrast(x)
+        br = self.brightness(x)
+        con = nn.functional.upsample(con, size=tuple(image.shape[-2:]))
+        br = nn.functional.upsample(br, size=tuple(image.shape[-2:]))
+
+        con = torch.clamp(con, 0.01)
+        # con *= 2.0
+        adj_image = image * con + br
+
+        # residual = adj_image - image 
+
+        return adj_image
+
 def LightNet(ngf=64, n_blocks=3):
     # model = ResnetGeneratorHalf(3, 3, 64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=3)
     model = ResnetGenerator(3, 3, ngf, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=n_blocks)
@@ -219,7 +328,7 @@ class L_grayscale(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-        self.loss = nn.MSELoss()
+        self.loss = nn.L1Loss()
 
     def forward(self, x, t):
         r, g, b = x[:, 0], x[:, 1], x[:, 2]
@@ -239,7 +348,7 @@ class L_ColorInvarianceConv(nn.Module):
         self.ci_conv = CIConv2d(invariant)
         self.ci_conv.eval()
 
-        self.loss = nn.MSELoss()
+        self.loss = nn.L1Loss()
 
     def forward(self, x, t):
         x = self.ci_conv(x)

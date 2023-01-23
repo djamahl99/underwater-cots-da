@@ -10,7 +10,7 @@ from pycocotools.cocoeval import COCOeval
 from pycocotools.coco import COCO
 import json
 
-def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed):
+def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed, return_preds=False):
     aims_test = True
     ann_path = ds.aims_anns
     imgs_boxes = ds.aims_imgs_boxes
@@ -54,8 +54,10 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed):
     ann_id = 0
     ann_id_gt = 0
 
+    returned_vals = []
+
     # now run preds
-    for images_kaggle, images_aims, image_ids, _, _ in tqdm(loader, desc="Evaluating"):
+    for images_kaggle, images_aims, image_ids, _, _, _ in tqdm(loader, desc="Evaluating"):
         if aims_test:
             images = images_aims.to(device)
         else:
@@ -100,9 +102,11 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed):
                     ann_id_gt += 1
         
         bboxes, scores = yolo.forward_pred_no_grad(images)
-        
-        bboxes = bboxes.flatten(0,-2)
-        scores = scores.flatten(0,-1)
+
+        bboxes = torch.cat(bboxes, dim=0)
+        scores = torch.cat(scores, dim=0)
+
+        returned_vals = [gt_instances, (bboxes, scores)]
 
         for box_i, box in enumerate(bboxes):
             if box.shape[0] == 0:
@@ -157,6 +161,9 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed):
     eval.accumulate()
     eval.summarize()
     print("eval", eval.stats)
+
+    if return_preds:
+        return eval.stats[1], returned_vals
 
     # map50
     return eval.stats[1]

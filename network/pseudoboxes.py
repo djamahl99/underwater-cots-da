@@ -43,14 +43,14 @@ class PseudoBoxer(nn.Module):
     # queue of previous confident predictions
     queue = []
 
-    def __init__(self, teacher: WrappedYOLO, darknet: ResnetGenerator, score_threshold=0.5, nms_threshold=0.4, max_to_add=5) -> None:
+    def __init__(self, teacher: WrappedYOLO, darknet: ResnetGenerator, score_threshold=0.5, nms_threshold=0.4, max_queue=100) -> None:
         super().__init__()
 
         self.teacher = teacher
         self.darknet = darknet
         self.score_threshold = score_threshold
         self.nms_threshold = nms_threshold
-        self.max_to_add = max_to_add
+        self.max_queue = max_queue
 
         self.to_pil = transforms.ToPILImage()
         self.to_tensor = transforms.ToTensor()
@@ -83,7 +83,7 @@ class PseudoBoxer(nn.Module):
         print(f"can add! queue={len(self.queue)}")
 
         images_with_crops = []
-        num_to_add_per_img = [np.random.randint(1, 5) for _ in enumerate(images)]
+        num_to_add_per_img = [np.random.randint(1, 3) for _ in enumerate(images)]
         total_to_add = sum(num_to_add_per_img)
 
         gt_instances = torch.zeros((total_to_add, 6), dtype=torch.float32)
@@ -113,7 +113,6 @@ class PseudoBoxer(nn.Module):
 
                 # image_with_crop[:, b[1]:b[3], b[0]:b[2]] = obj['image']
 
-                print("obj image", obj['image'].shape)
 
                 pil_obj = np.array(self.to_pil(obj['image']))
                 pil_src = np.array(self.to_pil(image_with_crop))
@@ -145,6 +144,43 @@ class PseudoBoxer(nn.Module):
         gt_instances = torch.cat([x.unsqueeze(0) for x in gt_instances], dim=0)
 
         return images_with_crops.to(images.device), gt_instances
+
+    def get_score_stats(self):
+        """
+        Get min/mean/max stats for queue scores
+
+        Returns:
+            tuple: (min, mean, max)
+        """
+        scores = [x['score'] for x in self.queue]
+        scores = torch.tensor(scores)
+
+        if scores.numel() == 0:
+            return 0.0, 0.0, 0.0
+
+        return scores.min().item(), scores.mean().item(), scores.max().item()
+
+    def prune_queue(self):
+        """
+        Prune the queue to remove less confident objects
+        """
+        scores = [x['score'] for x in self.queue]
+        scores = torch.tensor(scores)
+
+        median_score = torch.median(scores)
+        print(f"PRUNING: median_score={median_score:.2f}, num_in_queue={len(self.queue)}")
+
+        if len(self.queue) >= self.max_queue:
+            scores_topk = torch.topk(scores, k=self.max_queue).values
+            print(f"min/max from topk {scores_topk.min()}/{scores_topk.max()}")
+
+            topk_min = scores_topk.min()
+
+            # now filter queue so that >= minimum in topk
+            self.queue = list(filter(lambda x: x['score'] >= topk_min, self.queue))
+
+        else:
+            print("No Pruning to be done.")
 
     @torch.no_grad()
     def forward(self, images_aims: torch.Tensor, brighter_images_aims: torch.Tensor, img_ids: torch.Tensor):
@@ -202,8 +238,10 @@ class PseudoBoxer(nn.Module):
                         img_id=img_id,
                         image=im_copy[:, b[1]:b[3], b[0]:b[2]],
                         wh=wh,
-                        score=scores[i][j]
+                        score=scores[i][j].item()
                     ))
+                
+        self.prune_queue()
 
         student_images, gt_instances_crops = self.add_queue_objects_to_images(images_aims, for_student=True)
 
@@ -215,6 +253,6 @@ class PseudoBoxer(nn.Module):
         else:
             gt_instances = gt_instances_crops
 
-        print("gt instances / crops / pseudo", gt_instances.shape, gt_instances_crops.shape, gt_instances_pseudo.shape)
+        print("gt instances / crops / pseudo", gt_instances.shape[0], gt_instances_crops.shape[0], gt_instances_pseudo.shape[0])
 
         return student_images, gt_instances

@@ -98,15 +98,15 @@ def main():
     init_weights(darknet)
 
 
-    saved_state_dict_l = torch.load("snapshots/exalted-snow-144_light_latest.pth")
-    saved_state_dict_d = torch.load("snapshots/yolo/smart-morning-72_dark_latest.pth")
+    # saved_state_dict_l = torch.load("snapshots/exalted-snow-144_light_latest.pth")
+    # saved_state_dict_d = torch.load("snapshots/yolo/smart-morning-72_dark_latest.pth")
 
-    lightnet = nn.DataParallel(lightnet)
-    lightnet.load_state_dict(saved_state_dict_l)
-    lightnet = lightnet.module
+    # lightnet = nn.DataParallel(lightnet)
+    # lightnet.load_state_dict(saved_state_dict_l)
+    # lightnet = lightnet.module
 
     # darknet = nn.DataParallel(darknet)
-    darknet.load_state_dict(saved_state_dict_d)
+    # darknet.load_state_dict(saved_state_dict_d)
     # darknet = darknet.module
 
     lightnet.train()
@@ -119,10 +119,9 @@ def main():
     model_D = NLayerDiscriminator(input_nc=3, ndf=64, n_layers=3) # classes = num input channels    
     init_weights(model_D)
     # model_D = nn.DataParallel(model_D)
-    saved_state_dict = torch.load("snapshots/yolo/smart-morning-72_d_latest.pth")
+    # saved_state_dict = torch.load("snapshots/yolo/smart-morning-72_d_latest.pth")
     
-    # print(saved_state_dict.keys())
-    model_D.load_state_dict(saved_state_dict)
+    # model_D.load_state_dict(saved_state_dict)
     # model_D = model_D.module
 
     model_D.train()
@@ -153,9 +152,6 @@ def main():
 
     ds_val_aims = kaggle_aims_pair_boxed(aims_split="val.json")
 
-    # if args.lightnet:
-    #     optimizer_ld = optim.Adam(list(lightnet.parameters()) + list(darknet.parameters()) + list(model.parameters()), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
-    # else:
     
     optimizer_dark = optim.Adam(darknet.parameters(), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
     optimizer_light = optim.Adam(lightnet.parameters(), lr=args.learning_rate, betas=(0.9, 0.99), weight_decay=args.weight_decay)
@@ -181,7 +177,6 @@ def main():
     loss_TV = L_TV()
     loss_SSIM = SSIM()
     loss_bce = nn.BCEWithLogitsLoss()
-    loss_bounds = Loss_bounds()
     loss_abs = nn.L1Loss()
 
     kaggle_label = 0.0
@@ -307,15 +302,15 @@ def main():
             aims_brightening = r
             brighter_images_aims = images_aims + r 
 
-            loss_brighten_aims = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(brighter_images_aims, images_aims))\
-                + 5*torch.mean(loss_exp_z(brighter_images_aims, mean_light)) + loss_bounds(brighter_images_aims)
+            loss_brighten_aims = 10*loss_TV(r) + torch.mean(loss_SSIM(brighter_images_aims, images_aims))\
+                + torch.mean(loss_exp_z(brighter_images_aims, mean_light)) #+ loss_bounds(brighter_images_aims)
 
             # kaggle -> kaggle
             r = lightnet(images_kaggle)
             brighter_images_kaggle = images_kaggle + r 
 
-            loss_brighten_kaggle = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(brighter_images_kaggle, images_kaggle))\
-                            + 5*torch.mean(loss_exp_z(brighter_images_kaggle, mean_light)) + loss_bounds(brighter_images_kaggle)
+            loss_brighten_kaggle = 10*loss_TV(r) + torch.mean(loss_SSIM(brighter_images_kaggle, images_kaggle))\
+                            + torch.mean(loss_exp_z(brighter_images_kaggle, mean_light)) #+ loss_bounds(brighter_images_kaggle)
 
             # kaggle -> aims -> kaggle (cycle)
             # cycle_images_kaggle = images_kaggle + lightnet(images_kaggle + darknet(images_kaggle))
@@ -373,15 +368,15 @@ def main():
             kaggle_darkening = r
             darker_images_kaggle = images_kaggle + r 
 
-            loss_darken_kaggle = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(darker_images_kaggle, images_aims))\
-                 + 5*torch.mean(loss_exp_z(darker_images_kaggle, mean_dark)) + loss_bounds(darker_images_kaggle)
+            loss_darken_kaggle = 10*loss_TV(r) + torch.mean(loss_SSIM(darker_images_kaggle, images_aims))\
+                 + torch.mean(loss_exp_z(darker_images_kaggle, mean_dark)) #+ loss_bounds(darker_images_kaggle)
 
             # aims -> aims
             r = darknet(images_aims)
             darker_images_aims = images_aims + r 
 
-            loss_darken_aims = 10*loss_TV(r) + 5*torch.mean(loss_SSIM(darker_images_aims, images_aims))\
-                            + 5*torch.mean(loss_exp_z(darker_images_aims, mean_dark)) + loss_bounds(darker_images_aims)
+            loss_darken_aims = 10*loss_TV(r) + torch.mean(loss_SSIM(darker_images_aims, images_aims))\
+                            + torch.mean(loss_exp_z(darker_images_aims, mean_dark)) #+ loss_bounds(darker_images_aims)
 
             # aims -> kaggle -> aims (cycle)
             # cycle_images_aims = images_aims + darknet(images_aims + lightnet(images_aims))
@@ -446,7 +441,6 @@ def main():
             img_metas = [dict(ori_shape=(h, w), scale_factor=1, batch_input_shape=(h,w)) for i in range(len(images_kaggle))]
 
             # (img_ind, labels, bbox_cx, bbox_cy, bbox_w, bbox_h)
-            
             num_boxes = sum([0 if img_id.item() not in ds.kaggle_imgs_boxes else len(ds.kaggle_imgs_boxes[img_id.item()]['bboxes']) for img_id in image_ids])
             gt_instances = torch.zeros((num_boxes, 6), dtype=torch.float32)
 
@@ -461,8 +455,6 @@ def main():
                         box_i += 1
 
             losses_kaggle = model(images_kaggle, instance_datas=gt_instances.clone().to(device, dtype=torch.float32), img_metas=img_metas)
-            # losses_kaggle = {'loss_cls': 0, 'loss_obj': 0, 'loss_bbox': 0}
-
             losses_darker_kaggle = model(darker_images_kaggle, instance_datas=gt_instances.clone().to(device, dtype=torch.float32), img_metas=img_metas)
 
             losses_kaggle['loss_cls'] *= yolo_loss_weights['loss_cls']
@@ -474,7 +466,6 @@ def main():
             losses_darker_kaggle['loss_obj'] *= yolo_loss_weights['loss_obj']
 
             loss_yolo_kaggle = losses_kaggle['loss_cls'] + losses_kaggle['loss_obj'] + losses_kaggle['loss_bbox']
-            # loss_yolo_kaggle = torch.tensor(0)
             loss_yolo_kaggle_dark = losses_darker_kaggle['loss_cls'] + losses_darker_kaggle['loss_obj'] + losses_darker_kaggle['loss_bbox']
 
             loss_yolo = loss_yolo_kaggle + loss_yolo_kaggle_dark
@@ -482,12 +473,6 @@ def main():
             loss_cls = losses_kaggle['loss_cls'] + losses_darker_kaggle['loss_cls']
             loss_obj = losses_kaggle['loss_obj'] + losses_darker_kaggle['loss_obj']
             loss_bbox = losses_kaggle['loss_bbox'] + losses_darker_kaggle['loss_bbox'] 
-            ###########################################################################################
-
-            # loss = loss_yolo
-            
-            # loss.backward()
-            # optimizer_model.step()
 
             ########################################################################################################
             # Pseudo-labeling training on aims (dark) dataset      #################################################
@@ -545,6 +530,8 @@ def main():
 
             j += 1
 
+            pseudo_stats = pseudoboxer.get_score_stats()
+
             wandb.log({
                 'iter': i_iter,
                 'loss/yolo_pseudo': loss_yolo_pseudo.item(),
@@ -556,7 +543,10 @@ def main():
                 'loss/bbox': loss_bbox.item(),
                 'loss/obj': loss_obj.item(),
                 'loss/dark': darknet_loss,
-                'loss/bright': lightnet_loss
+                'loss/bright': lightnet_loss,
+                'pseudoboxer/min_score': pseudo_stats[0],
+                'pseudoboxer/mean_score': pseudo_stats[1],
+                'pseudoboxer/max_score': pseudo_stats[2]
             })
 
             if j % 1000 == 0:
