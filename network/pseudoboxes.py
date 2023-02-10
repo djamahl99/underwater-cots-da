@@ -11,7 +11,6 @@ from torchvision import transforms
 
 import cv2
 import numpy as np
-
 from enum import IntEnum
 
 class CropTypes(IntEnum):
@@ -35,9 +34,6 @@ class PseudoBoxer(nn.Module):
         This module uses the teacher to produce gt_instances for calculating the loss on the student.
 
         It also stitches previous confident predictions into current images to add new bounding boxes.
-
-    Args:
-        nn (_type_): _description_
     """
 
     # queue of previous confident predictions
@@ -51,15 +47,16 @@ class PseudoBoxer(nn.Module):
         self.score_threshold = score_threshold
         self.nms_threshold = nms_threshold
         self.max_queue = max_queue
+        self.dropout = 0.05
 
         self.to_pil = transforms.ToPILImage()
         self.to_tensor = transforms.ToTensor()
 
         self.student_aug = transforms.Compose(transforms=[
-            transforms.RandomPosterize(7, p=0.3),
-            transforms.RandomAdjustSharpness(0.3, p=0.3),
-            transforms.RandomAutocontrast(p=0.3),
-            transforms.RandomEqualize(p=0.3)
+            transforms.RandomPosterize(7, p=0.8),
+            transforms.RandomAdjustSharpness(0.3, p=0.8),
+            transforms.RandomAutocontrast(p=0.8),
+            transforms.RandomEqualize(p=0.8)
         ])
 
     @torch.no_grad()
@@ -164,13 +161,19 @@ class PseudoBoxer(nn.Module):
         """
         Prune the queue to remove less confident objects
         """
+        if len(self.queue) > self.max_queue and np.random.rand() <= self.dropout:
+            # randomly remove from queue
+            i_drop = np.random.choice(len(self.queue) - 1)
+            print(f"PRUNING-DROPOUT: {self.queue[i_drop]['score']}")
+            self.queue.pop(i_drop)
+
         scores = [x['score'] for x in self.queue]
         scores = torch.tensor(scores)
 
         median_score = torch.median(scores)
         print(f"PRUNING: median_score={median_score:.2f}, num_in_queue={len(self.queue)}")
 
-        if len(self.queue) >= self.max_queue:
+        if len(self.queue) > self.max_queue:
             scores_topk = torch.topk(scores, k=self.max_queue).values
             print(f"min/max from topk {scores_topk.min()}/{scores_topk.max()}")
 
@@ -178,7 +181,6 @@ class PseudoBoxer(nn.Module):
 
             # now filter queue so that >= minimum in topk
             self.queue = list(filter(lambda x: x['score'] >= topk_min, self.queue))
-
         else:
             print("No Pruning to be done.")
 
@@ -213,7 +215,7 @@ class PseudoBoxer(nn.Module):
             add_to_queue = img_id not in [x['img_id'] for x in self.queue]
 
             for j, box in enumerate(bboxes):
-                if scores[i][j] < self.score_threshold:
+                if scores[i][j] < self.score_threshold or np.random.rand() > scores[i][j]: # random chance accept low score
                     continue
 
                 b = [int(x) for x in box]

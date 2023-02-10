@@ -7,3 +7,7 @@ imgs/
 imgs_/
 .vscode/settings.json
 AIMS_data_test/
+old_scripts/
+eval_results_coco_format.json
+gt_coco_format.json
+comparison_imgs/

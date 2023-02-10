@@ -10,17 +10,21 @@ register_all_modules()
 
 
 class WrappedYOLO(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, config=None, device='cuda') -> None:
         super().__init__()
 
+        
+        if config is None:
+            config = "yang_model/yolov5_l_kaggle_cots.py"
 
-        config = "yang_model/yolov5_l_kaggle_cots.py"
-        ckpt = "yang_model/bbox_mAP_epoch_70.pth"
+        print("config", config)
+        # ckpt = "yang_model/bbox_mAP_epoch_70.pth"
+        ckpt = "yang_model/bbox_mAP_epoch_200.pth"
 
         model = init_detector(
                 config=config,
                 checkpoint=ckpt,
-                device='cuda',
+                device=device,
         )
 
         self.backbone = model.backbone

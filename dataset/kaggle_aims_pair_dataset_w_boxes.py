@@ -41,7 +41,7 @@ class kaggle_aims_pair_boxed(data.Dataset):
         super().__init__()
 
         assert aims_split in ["train.json", "val.json", "test.json"]
-        assert kaggle_split in ["mmdet_split_train.json", "mmdet_split_test.json"]
+        assert kaggle_split in ["mmdet_split_train.json", "mmdet_split_test.json", "mmdet_split_val.json"]
         
         self.kaggle_split = kaggle_split
         self.aims_split = aims_split
@@ -69,14 +69,15 @@ class kaggle_aims_pair_boxed(data.Dataset):
         ])
 
         # self.kaggle_root = "/mnt/storage/djamahl/data/Kaggle_1080_google_v1"
-        self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
+        self.kaggle_root = "/mnt/cruncher-ph/ssd/datasets-ml/COTS_GoPro_1080_v3/"
+        # self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
 
         # self.aims_root = "/home/etc004/code/YOLOX/AIMS_data_test"
         # self.aims_root = "/mnt/d61-visage-data/work/datasets/"
         self.aims_root = "../AIMS_data_test"
 
         # just use train :)
-        self.kaggle_anns = str(Path(self.kaggle_root) / f"annotations/{kaggle_split}")
+        self.kaggle_anns = str(Path(self.kaggle_root) / f"{kaggle_split}")
         self.aims_anns = str(Path(self.aims_root) / f"annotations/{aims_split}")
         # self.aims_anns = "aims_sep22.json"
 

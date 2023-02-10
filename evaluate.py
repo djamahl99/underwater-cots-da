@@ -4,21 +4,25 @@ from torch.utils import data
 from tqdm import tqdm
 from dataset.kaggle_aims_pair_dataset_w_boxes import kaggle_aims_pair_boxed
 
+from network.relighting import ResnetGenerator
+from network.basic_enhance import NormalizeAdapt
+
 # from mmdet.datasets import CocoDataset
 from network.yolo_wrapper import WrappedYOLO
 from pycocotools.cocoeval import COCOeval
 from pycocotools.coco import COCO
 import json
+import argparse
 
-def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed, return_preds=False):
+def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed, return_preds=False, enhance=None):
     aims_test = True
     ann_path = ds.aims_anns
     imgs_boxes = ds.aims_imgs_boxes
 
-    if ds.kaggle_split == "mmdet_split_test.json":
+    if ds.kaggle_split == "mmdet_split_test.json" or "val" in ds.kaggle_split:
         aims_test = False
         ann_path = ds.kaggle_anns
-        ds.kaggle_imgs_boxes
+        imgs_boxes = ds.kaggle_imgs_boxes
 
     loader = data.DataLoader(
         ds, batch_size=1, shuffle=False, num_workers=1, pin_memory=True
@@ -36,8 +40,11 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed, return_preds=False):
     with open(ann_path, "r") as f:
         data_dict = json.load(f)
 
-    cats = data_dict['categories'][0]
-    results_coco['categories'] = [cats]
+    # cats = data_dict['categories'][0]
+    cats = list(filter(lambda x: x['name'] == "COTS", data_dict['categories']))
+    print("cats", cats)
+    cat_id = cats[0]['id']
+    results_coco['categories'] = cats
     
     for img in data_dict['images']:
         img_ = img
@@ -63,6 +70,18 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed, return_preds=False):
         else:
             images = images_kaggle.to(device)
 
+        images_aims = images_aims.to(device)
+        images_kaggle = images_kaggle.to(device)
+
+
+        if enhance is not None:
+            if isinstance(enhance, ResnetGenerator):
+                images = images + enhance(images)
+            elif isinstance(enhance, NormalizeAdapt):
+                images = enhance(images_aims, images_kaggle)
+            else:
+                raise Exception("unkown enhanced")
+
         num_boxes = sum([0 if img_id.item() not in imgs_boxes else len(imgs_boxes[img_id.item()]['bboxes']) for img_id in image_ids])
         gt_instances = torch.zeros((num_boxes, 6), dtype=torch.float32)
 
@@ -86,7 +105,7 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed, return_preds=False):
                     gt_anns.append(dict(
                         id=ann_id_gt,
                         image_id=img_id.item(),
-                        category_id=1,
+                        category_id=cat_id,
                         segmentation=[],
                         area=int(area), # TODO
                         # score=1.0,
@@ -124,7 +143,7 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed, return_preds=False):
             anns.append(dict(
                 id=ann_id,
                 image_id=image_ids[0].item(),
-                category_id=1,
+                category_id=cat_id,
                 segmentation=[],
                 area=int(area),
                 score=float(scores[box_i].item()),
@@ -170,9 +189,27 @@ def evaluate(yolo: WrappedYOLO, ds: kaggle_aims_pair_boxed, return_preds=False):
 
     
 if __name__ == "__main__":
-    ds = kaggle_aims_pair_boxed(aims_split="test.json")
-    # ds = kaggle_aims_pair_boxed(kaggle_split="mmdet_split_test.json")
+    parser = argparse.ArgumentParser(
+                    prog = 'Evaluation',
+                    description = 'Evaluates the model on the given dataset with the specified split.')
+
+    parser.add_argument('--dataset', default='aims', choices=['aims', 'kaggle'])
+    parser.add_argument('--split', default='test', choices=['test', 'val'])
+    args = parser.parse_args()
+
+    assert args.dataset in ['aims', 'kaggle'], "invalid dataset"
+    
+    splits = {
+        'aims': {'test': 'test.json', 'val': 'val.json'},
+        'kaggle': {'test': 'mmdet_split_test.json', 'val': 'mmdet_split_val.json'}
+    }
+
+    split = splits[args.dataset][args.split]
+
+    if args.dataset == "aims":
+        ds = kaggle_aims_pair_boxed(aims_split=split)
+    else:
+        ds = kaggle_aims_pair_boxed(kaggle_split=split)
 
     model = WrappedYOLO().eval()
     map50 = evaluate(model, ds)
-    print(f"map50 = {map50:.2f}")

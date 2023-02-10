@@ -505,7 +505,7 @@ class LapMap(nn.Module):
 
 class VGGLoss(nn.Module):
     # vgg19 perceptual loss
-    def __init__(self, gpu_ids):
+    def __init__(self):
         super(VGGLoss, self).__init__()
         self.vgg = Vgg19().cuda()
         self.criterion = nn.L1Loss()

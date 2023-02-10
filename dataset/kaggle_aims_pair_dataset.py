@@ -19,18 +19,19 @@ class kaggle_aims_pair(data.Dataset):
 
         size = (288, 512)
         size = (768, 1280)
+        # size = (1088, 1920)
 
         # transformer
         # size = (256, 256)
         
-        # add more later
         self.transform_kaggle = T.Compose(transforms=[
             #T.CenterCrop(1080),
             T.Resize(size),
             # T.RandomPerspective(distortion_scale=0.1),
-            # T.RandomAutocontrast(p=0.1),
+            T.RandomAutocontrast(p=0.3),
             # T.RandomEqualize(),
-            # T.RandomAdjustSharpness(),
+            T.RandomAdjustSharpness(sharpness_factor=0.3),
+            
             # T.RandomRotation(degrees=1),
             # T.AugMix(),
             T.ToTensor()
@@ -39,16 +40,23 @@ class kaggle_aims_pair(data.Dataset):
         self.transform_aims = T.Compose(transforms=[
             #T.CenterCrop(3040),
             T.Resize(size),
+            # T.RandomPerspective(distortion_scale=0.1),
+            T.RandomAutocontrast(p=0.3),
+            # T.RandomEqualize(),
+            T.RandomAdjustSharpness(sharpness_factor=0.3),
+            # T.RandomRotation(degrees=1),
             T.ToTensor()
         ])
 
-        self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
+        # self.kaggle_root = "/mnt/storage/djamahl/data/Kaggle_1080_google_v1"
+        self.kaggle_root = "/mnt/cruncher-ph/ssd/datasets-ml/COTS_GoPro_1080_v3/"
+        # self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
+
         # self.aims_root = "/home/etc004/code/YOLOX/AIMS_data_test"
         # self.aims_root = "/mnt/d61-visage-data/work/datasets/"
-        self.aims_root = "AIMS_data_test"
-
+        self.aims_root = "../AIMS_data_test"
         # just use train :)
-        self.kaggle_anns = str(Path(self.kaggle_root) / "annotations/mmdet_split_train.json")
+        self.kaggle_anns = str(Path(self.kaggle_root) / "mmdet_split_train.json")
         self.aims_anns = str(Path(self.aims_root) / "annotations/train.json")
         # self.aims_anns = "aims_sep22.json"
 

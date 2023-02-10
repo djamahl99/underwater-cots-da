@@ -80,8 +80,24 @@ def main():
 
     model1 = WrappedYOLO()
     model2 = WrappedYOLO()
-    sd = torch.load("different-moon-91_yolo_latest.pth")
-    model2.load_state_dict(sd)
+
+    model_setting="online"
+
+        # now evaluate with adaptive batch norm
+    from torch import nn
+    for m in model2.modules():
+        if isinstance(m, nn.BatchNorm2d):
+            # m.affine = False
+            # m.track_running_stats = False
+
+            print("before", m.running_mean.mean(), m.running_var.mean())
+
+            m.running_mean = None
+            m.running_var = None
+
+    # sd = torch.load("different-moon-91_yolo_latest.pth")
+    
+    # model2.load_state_dict(sd)
 
 
     # for param_q, param_k in zip(model1.backbone.parameters(), model2.backbone.parameters()):
@@ -134,7 +150,7 @@ def main():
         ax.imshow(images_aims.permute(1, 2, 0).numpy())
 
         plot_preds(bboxes1, scores1, ax, label_prefix="orig.", col_idx=0)
-        plot_preds(bboxes2, scores2, ax, label_prefix="UDA.", col_idx=1)
+        plot_preds(bboxes2, scores2, ax, label_prefix="BatchNorm", col_idx=1)
         plot_gt(gt_instances, ax)
 
         # canvas.draw()
@@ -145,8 +161,8 @@ def main():
         # im = Image.fromarray(X).convert("RGB")
         # im.save(f"comparison_imgs/{idx}.jpg")
         plt.legend()
-
-        fig.savefig(f"comparison_imgs/{aims_img_ids}.jpg")
+        fig.tight_layout()
+        fig.savefig(f"comparison_imgs/{model_setting}{aims_img_ids}.jpg")
 
         plt.close()
 

@@ -324,16 +324,51 @@ def LightNet(ngf=64, n_blocks=3):
     model = ResnetGenerator(3, 3, ngf, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=n_blocks)
     return model
 
+class LightNetTransparent(nn.Module):
+    def __init__(self, ngf=64, n_blocks=3) -> None:
+        super().__init__()
+
+        self.n_blocks = n_blocks
+        self.ngf = ngf
+
+        self.generator = ResnetGenerator(3, 4, ngf=ngf, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=n_blocks)
+
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.generator(x)
+
+        x_rgb = x[:, :3, :, :]
+        x_a = x[:, -1, :, :].unsqueeze(1)
+
+        x_a = self.sigmoid(x_a)
+    
+        # x_a = x_a.repeat((1, 3, 1, 1))
+        return x_rgb, x_a
+
+# def LightNetTransparent(ngf=64, n_blocks=3):
+#     model = ResnetGenerator(3, 4, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=n_blocks)
+
+
+
+#     return model
+
 class L_grayscale(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
         self.loss = nn.L1Loss()
 
+        
+        self.normx = nn.BatchNorm2d(3, track_running_stats=False, affine=False)
+        self.normt = nn.BatchNorm2d(3, track_running_stats=False, affine=False)
+
     def forward(self, x, t):
+        x = self.normx(x)
         r, g, b = x[:, 0], x[:, 1], x[:, 2]
         L_x = 0.299*r + 0.587*g + 0.114*b
 
+        t = self.normt(t)
         r, g, b = t[:, 0], t[:, 1], t[:, 2]
         L_t = 0.299*r + 0.587*g + 0.114*b
         
@@ -371,7 +406,7 @@ class Loss_bounds(nn.Module):
     def __init__(self) -> None:
         super(Loss_bounds, self).__init__()
 
-        self.relu = nn.ReLU()
+        self.relu = nn.GELU()
 
     def forward(self, x):
         v =  torch.mean(self.relu(-x) + self.relu(x-1))
