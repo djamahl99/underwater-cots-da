@@ -80,8 +80,6 @@ class kaggle_aims_pair(data.Dataset):
 
         cots_cat_id_kaggle = 0
         cots_cat_id_aims = 1
-
-        print("cats", aims_data['categories'], kaggle_data['categories'])
         
         for ann in tqdm(aims_data['annotations']):
             if ann['category_id'] == cots_cat_id_aims:
@@ -93,14 +91,12 @@ class kaggle_aims_pair(data.Dataset):
 
         ms = -1
 
-        # self.aims_imgs_list = [self.aims_root + "/" + x['file_name'] for x in aims_data['images']]
         self.aims_imgs_list = [{
             'image_id': x['id'], 
             'file_name': self.aims_root + "/" + x['file_name'],
             'label': 0.0 if x['id'] not in aims_imgs_labels else 1.0
             } for x in tqdm(aims_data['images'][0:ms])]
 
-        # self.kaggle_imgs_list = [self.kaggle_root + "/" + x['file_name'] for x in kaggle_data['images']]
         self.kaggle_imgs_list = [{
             'image_id': x['id'], 
             'file_name': self.kaggle_root + "/" + x['file_name'],
@@ -113,11 +109,11 @@ class kaggle_aims_pair(data.Dataset):
         self.aims_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.aims_imgs_list))
         self.kaggle_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.kaggle_imgs_list))
 
-        print("lost images", kl - len(self.kaggle_imgs_list), al - len(self.aims_imgs_list))
+        print("lost images (kaggle, aims)", kl - len(self.kaggle_imgs_list), al - len(self.aims_imgs_list))
 
         self.shortest_list = min(len(self.aims_imgs_list), len(self.kaggle_imgs_list))
 
-        print("number of images", len(self.aims_imgs_list), len(self.kaggle_imgs_list))
+        print("number of images (kaggle, aims)", len(self.kaggle_imgs_list), len(self.aims_imgs_list))
 
         # self.shortest_list = 10000 # TODO
 
@@ -138,4 +134,4 @@ class kaggle_aims_pair(data.Dataset):
         kaggle_label = self.kaggle_imgs_list[kaggle_index]['label']
         aims_label = self.aims_imgs_list[aims_index]['label']
 
-        return self.transform_kaggle(kaggle_img), self.transform_aims(aims_img), torch.tensor([kaggle_label]), torch.tensor(aims_label)
+        return self.transform_kaggle(kaggle_img), self.transform_aims(aims_img), torch.tensor(kaggle_label), torch.tensor(aims_label)

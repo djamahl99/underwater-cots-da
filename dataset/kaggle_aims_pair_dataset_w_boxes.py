@@ -12,8 +12,19 @@ from tqdm import tqdm
 import numpy as np
 
 import torchvision.transforms as T
+from configs.train_config import DATA_DIRECTORY_SOURCE, DATA_DIRECTORY_TARGET, SOURCE_CATEGORY_ID, TARGET_CATEGORY_ID
 
-def process_ann_box(ann: dict, image: dict, size: tuple):
+def process_ann_box(ann: dict, image: dict, size: tuple) -> np.array:
+    """Processes an annotation, resizing it to the given size from it's original size in image.
+
+    Args:
+        ann (dict): the annotation from the coco dictionary
+        image (dict): the image from the coco dictionary
+        size (tuple): the size of the image (height, width)
+
+    Returns:
+        np.array: processed bounding box
+    """
     # rescale the box to the current size
     old_size = (image['height'], image['width'])
     ratios = (size[0]/old_size[0], size[1]/old_size[1])
@@ -32,54 +43,49 @@ def process_ann_box(ann: dict, image: dict, size: tuple):
     bbox[0::2] = np.clip(bbox[0::2], 0.0, float(size[1]))
     bbox[1::2] = np.clip(bbox[1::2], 0.0, float(size[0]))
 
-    assert bbox[0::2].max() <= size[1] and bbox[1::2].max() <= size[0], f"bbox OOB after rescale? {bbox} {size} {old_size} {ratios}"
+    assert bbox[0::2].max() <= size[1] and bbox[1::2].max() <= size[0],\
+         f"bbox out of bounds after rescale box={bbox} siz={size} old_size={old_size} ratios={ratios}"
 
     return bbox
 
 class kaggle_aims_pair_boxed(data.Dataset):
-    def __init__(self, aims_split="train.json", kaggle_split="mmdet_split_train.json") -> None:
+    def __init__(self, aims_split="train.json", kaggle_split="mmdet_split_train.json", shortest=False, apply_augs=True) -> None:
         super().__init__()
 
-        assert aims_split in ["train.json", "val.json", "test.json"]
-        assert kaggle_split in ["mmdet_split_train.json", "mmdet_split_test.json", "mmdet_split_val.json"]
-        
         self.kaggle_split = kaggle_split
         self.aims_split = aims_split
+        self.shortest = shortest
 
-        # size = (288, 512) # for testing on tactile
+        p_default = 1.0 if apply_augs else 0.0
+
         self.size = (768, 1280)
-        # self.size = (1088, 1920)
         
-        # add more later TODO: use mmyolo LetterResize ... transforms
         self.transform_kaggle = T.Compose(transforms=[
-            #T.CenterCrop(1080),
             T.Resize(self.size),
-            # T.RandomPerspective(distortion_scale=0.1),
-            # T.RandomAutocontrast(p=0.1),
-            # T.RandomEqualize(),
-            # T.RandomAdjustSharpness(),
-            # T.RandomRotation(degrees=1),
-            # T.AugMix(),
+            T.RandomPosterize(4, p=min(0.5, p_default)),
+            T.RandomAdjustSharpness(0.2, p=min(0.75, p_default)),
+            T.RandomAutocontrast(p=min(0.6, p_default)),
+            T.RandomEqualize(p=min(0.5, p_default)),
             T.ToTensor()
         ])
 
         self.transform_aims = T.Compose(transforms=[
             T.Resize(self.size),
+            T.RandAugment(num_ops=2, magnitude=5),
             T.ToTensor()
         ])
 
-        # self.kaggle_root = "/mnt/storage/djamahl/data/Kaggle_1080_google_v1"
-        self.kaggle_root = "/mnt/cruncher-ph/ssd/datasets-ml/COTS_GoPro_1080_v3/"
-        # self.kaggle_root = "/home/etc004/code/YOLOX/data/Kaggle_1080_google_v1"
+        if not apply_augs:
+            self.transform_aims = T.Compose(transforms=[
+                T.Resize(self.size),
+                T.ToTensor()
+            ])
 
-        # self.aims_root = "/home/etc004/code/YOLOX/AIMS_data_test"
-        # self.aims_root = "/mnt/d61-visage-data/work/datasets/"
-        self.aims_root = "../AIMS_data_test"
+        self.kaggle_root = DATA_DIRECTORY_SOURCE
+        self.aims_root = DATA_DIRECTORY_TARGET
 
-        # just use train :)
-        self.kaggle_anns = str(Path(self.kaggle_root) / f"{kaggle_split}")
+        self.kaggle_anns = str(Path(self.kaggle_root) / f"annotations/{kaggle_split}")
         self.aims_anns = str(Path(self.aims_root) / f"annotations/{aims_split}")
-        # self.aims_anns = "aims_sep22.json"
 
         with open(self.kaggle_anns, 'r') as f:
             kaggle_data = json.load(f)
@@ -140,58 +146,39 @@ class kaggle_aims_pair_boxed(data.Dataset):
         self.kaggle_imgs_boxes = kaggle_imgs_boxes
         self.aims_imgs_boxes = aims_imgs_boxes
 
-        num_with_boxes = 0
-        num_without = 0
-
-        for x in self.kaggle_imgs_list:
-            if len(x['boxes']['bboxes']) > 0:
-                num_with_boxes += 1
-            else: 
-                num_without += 1
-
-        print(f"kaggle with anns={num_with_boxes} without anns ={num_without}")
-
         kl = len(self.kaggle_imgs_list)
         al = len(self.aims_imgs_list)
 
         self.aims_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.aims_imgs_list))
         self.kaggle_imgs_list = list(filter(lambda x: osp.exists(x['file_name']), self.kaggle_imgs_list))
 
-        print("lost images", kl - len(self.kaggle_imgs_list), al - len(self.aims_imgs_list))
+        print("lost images (aims, kaggle)", al - len(self.aims_imgs_list), kl - len(self.kaggle_imgs_list))
 
         self.shortest_list = min(len(self.aims_imgs_list), len(self.kaggle_imgs_list))
 
-        print("number of images", len(self.aims_imgs_list), len(self.kaggle_imgs_list))
+        print("number of images (aims, kaggle)", len(self.aims_imgs_list), len(self.kaggle_imgs_list))
 
         assert self.shortest_list > 0, "shortest dataset should have more than 0 existing images!"
 
+        self.smallest = "aims"
+        if len(self.aims_imgs_list) > len(self.kaggle_imgs_list):
+            self.smallest = "kaggle"
+
     def __len__(self):
-        if self.aims_split == "train.json":
-            # go through all kaggle (training yolo)
-            return len(self.kaggle_imgs_list)
-
-        # go though all aims split (evaluating yolo on aims val/test)
-        return len(self.aims_imgs_list)
-
+        return self.shortest_list
+    
     def __getitem__(self, index) -> tuple:
-        # if aims is val/test -> give aims boxes for evaluation 
-        if self.aims_split == "train.json":
-            # so that we don't always pair the same aims / kaggle image
+        if self.smallest == "aims":
             aims_index = np.random.randint(low=0, high=len(self.aims_imgs_list))
-            # kaggle_index = np.random.randint(low=0, high=self.shortest_list)
             kaggle_index = index
         else:
             aims_index = index
-            kaggle_index = index
+            kaggle_index = np.random.randint(low=0, high=len(self.kaggle_imgs_list))
 
         aims_img = Image.open(self.aims_imgs_list[aims_index]['file_name'])
         kaggle_img = Image.open(self.kaggle_imgs_list[kaggle_index]['file_name'])
 
-        kaggle_label = self.kaggle_imgs_list[kaggle_index]['label']
-        image_id = self.kaggle_imgs_list[kaggle_index]['image_id']
-        if self.aims_split != "train.json":
-            image_id = self.aims_imgs_list[aims_index]['image_id']
+        kaggle_image_id = self.kaggle_imgs_list[kaggle_index]['image_id']
+        aims_image_id = self.aims_imgs_list[aims_index]['image_id']
 
-        aims_label = self.aims_imgs_list[aims_index]['label']
-
-        return self.transform_kaggle(kaggle_img), self.transform_aims(aims_img), image_id, torch.tensor(kaggle_label), torch.tensor(aims_label), self.aims_imgs_list[aims_index]['image_id']
+        return self.transform_kaggle(kaggle_img), self.transform_aims(aims_img), kaggle_image_id, aims_image_id
