@@ -1,94 +1,92 @@
 import argparse
+from .env_config import *
 
-MODEL = 'yolo'  # PSPNet, DeepLab, RefineNet
-RESTORE_FROM = './pretrained_models/pretrain_pspnet_150000.pth'
+MODEL = 'yolo'
+
+LIGHTNET = "..\DANNet\snapshots\yolo\scintillating-cake-209_light_latest.pth"
+DARKNET = "..\DANNet\snapshots/yolo/dual-discrim-epoch200-yang_dark_5000.pth"
+D_DS = "..\DANNet\snapshots\yolo\dual-discrim-epoch200-yang_d_ds_5000.pth"
+D_ADV = "..\DANNet\snapshots\yolo\dual-discrim-epoch200-yang_d_adv_5000.pth"
 
 BATCH_SIZE = 2
-ITER_SIZE = 1
 NUM_WORKERS = 2
-
-SET = 'train'
-DATA_DIRECTORY = '/path/to/cityscape'
-DATA_LIST_PATH = './dataset/lists/cityscapes_train.txt'
-INPUT_SIZE = '512'
-DATA_DIRECTORY_TARGET = '/path/to/Dark_Zurich_train_anon/rgb_anon'
-DATA_LIST_PATH_TARGET = './dataset/lists/zurich_dn_pair_train.csv'
-INPUT_SIZE_TARGET = '512'
-
-NUM_CLASSES = 19
-IGNORE_LABEL = 255
 
 LEARNING_RATE = 1e-4
 LEARNING_RATE_YOLO = 1e-6
-POWER = 0.9
 MOMENTUM = 0.9
 WEIGHT_DECAY = 0.0005
 LEARNING_RATE_D = 1e-4
-MOMENTUM_TEACHER = 0.9995
+MOMENTUM_TEACHER = 0.6 # 0.9995
 TEMPERATURE_TEACHER = 0.04
-TEACHER_SCORE_THRESH = 0.4
+TEACHER_SCORE_THRESH = 0.6
+QUEUE_SIZE = 200
 
-NUM_STEPS = 50000
+NUM_STEPS = 1
 SAVE_PRED_EVERY = 1
 SNAPSHOT_DIR = './snapshots/'+MODEL
 STD = 0.05
 
+# enhancement weights
+e_wgts = dict(
+    tv=10,
+    ssim=1,
+    expz=1,
+    ciconv=1.0
+)
+
+# fixed from yang_model
+yolo_loss_weights = dict(
+    loss_cls=0.22499999999999998,
+    loss_bbox=0.037500000000000006,
+    loss_obj=2.0999999999999996
+)
+
+yolov8_loss_weights = dict(
+    loss_cls=0.5, # was 0.5
+    loss_bbox=0.1, # was 7.5
+    loss_dfl=1.5/4
+)
+
+fasterrcnn_loss_weights = dict(
+    loss_rpn_cls=1.0,
+    loss_rpn_bbox=1.0,
+    loss_cls=1.0,
+    loss_bbox=1.0,
+)
 
 def get_arguments():
-    parser = argparse.ArgumentParser(description="DANNet")
-    parser.add_argument("--model", type=str, default=MODEL,
-                        help="available options : DeepLab")
+    parser = argparse.ArgumentParser(description="Underwater Domain Adaptation")
+    parser.add_argument('--model', default='yolov5', choices=['yolov5', 'yolov8', 'fasterrcnn'])
+    parser.add_argument('--run-name', type=str)
+
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE,
                         help="Number of images sent to the network in one step.")
-    parser.add_argument("--iter-size", type=int, default=ITER_SIZE,
-                        help="Accumulate gradients for ITER_SIZE iterations.")
+    parser.add_argument("--queue-size", type=int, default=QUEUE_SIZE,
+                        help="Size of object injection queue.")
     parser.add_argument("--num-workers", type=int, default=NUM_WORKERS,
                         help="number of workers for multithread dataloading.")
-    parser.add_argument("--data-dir", type=str, default=DATA_DIRECTORY,
-                        help="Path to the directory containing the source dataset.")
-    parser.add_argument("--data-list", type=str, default=DATA_LIST_PATH,
-                        help="Path to the file listing the images in the source dataset.")
-    parser.add_argument("--ignore-label", type=int, default=IGNORE_LABEL,
-                        help="The index of the label to ignore during the training.")
-    parser.add_argument("--input-size", type=int, default=INPUT_SIZE,
-                        help="Comma-separated string with height and width of source images.")
     parser.add_argument("--data-dir-target", type=str, default=DATA_DIRECTORY_TARGET,
                         help="Path to the directory containing the target dataset.")
-    parser.add_argument("--data-list-target", type=str, default=DATA_LIST_PATH_TARGET,
-                        help="Path to the file listing the images in the target dataset.")
-    parser.add_argument("--input-size-target", type=int, default=INPUT_SIZE_TARGET,
-                        help="Comma-separated string with height and width of target images.")
     parser.add_argument("--learning-rate", type=float, default=LEARNING_RATE,
                         help="Base learning rate for training with pimgolynomial decay.")
     parser.add_argument("--learning-rate-D", type=float, default=LEARNING_RATE_D,
                         help="Base learning rate for discriminator.")
     parser.add_argument("--learning-rate-yolo", type=float, default=LEARNING_RATE_YOLO,
                         help="Base learning rate for yolo.")
-    parser.add_argument("--momentum-teacher", type=float, default=MOMENTUM_TEACHER,
-                        help="EMA momentum for yolo teacher")
-    parser.add_argument("--temperature-teacher", type=float, default=TEMPERATURE_TEACHER,
-                        help="Temperature for yolo teacher")
     parser.add_argument("--teacher-score-thresh", type=float, default=TEACHER_SCORE_THRESH,
                         help="Teacher pseudolabelling score threshold")
     parser.add_argument("--momentum", type=float, default=MOMENTUM,
                         help="Momentum component of the optimiser.")
-    parser.add_argument("--num-classes", type=int, default=NUM_CLASSES,
-                        help="Number of classes to predict (including background).")
     parser.add_argument("--num-steps", type=int, default=NUM_STEPS,
-                        help="Number of training steps.")
-    parser.add_argument("--power", type=float, default=POWER,
-                        help="Decay parameter to compute the learning rate.")
-    parser.add_argument("--restore-from", type=str, default=RESTORE_FROM,
-                        help="Where restore model parameters from.")
-    parser.add_argument("--save-pred-every", type=int, default=SAVE_PRED_EVERY,
-                        help="Save summaries and checkpoint every often.")
-    parser.add_argument("--snapshot-dir", type=str, default=SNAPSHOT_DIR,
-                        help="Where to save snapshots of the model.")
+                        help="Number of training steps/batches.")
     parser.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY,
                         help="Regularisation parameter for L2-loss.")
-    parser.add_argument("--set", type=str, default=SET,
-                        help="choose adaptation set.")
-    parser.add_argument("--std", type=float, default=STD)
-    # added
-    parser.add_argument("--lightnet", type=bool, default=False)
+    parser.add_argument("--lightnet", type=str, default=LIGHTNET,
+                        help="Lightnet checkpoint.")
+    parser.add_argument("--darknet", type=str, default=DARKNET,
+                        help="Darknet checkpoint.")
+    parser.add_argument("--train-style", type=bool, default=False,
+                        help="Whether to train discriminators/relighting networks.")
+    parser.add_argument("--snapshot-dir", type=str, default=SNAPSHOT_DIR,
+                        help="Where to save snapshots.")
     return parser.parse_args()
