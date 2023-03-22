@@ -108,6 +108,7 @@ class CIConv2d(nn.Module):
     def __init__(self, invariant, k=3, scale=0.0):
 
         super(CIConv2d, self).__init__()
+        self.invariant = invariant
         assert invariant in ['E','H','N','W','C'], 'invalid invariant'
         self.inv_function = inv_switcher[invariant]
 

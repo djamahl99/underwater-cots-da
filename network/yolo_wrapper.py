@@ -1,25 +1,25 @@
-from mmdet.apis import init_detector
 from mmyolo.utils import register_all_modules
+# from mmdet.utils import register_all_modules
+from mmdet.apis import init_detector
 import torch
 from torch import nn
 from mmengine.structures import InstanceData
 from typing import List, Dict
 
-
-register_all_modules()
-
-
 class WrappedYOLO(nn.Module):
-    def __init__(self, config=None, device='cuda') -> None:
+    def __init__(self, config=None, ckpt=None, device='cuda') -> None:
         super().__init__()
 
+        register_all_modules()
         
         if config is None:
             config = "yang_model/yolov5_l_kaggle_cots.py"
 
-        print("config", config)
+        if ckpt is None:
+            ckpt = "yang_model/bbox_mAP_epoch_200.pth"
+
+        print("config, ckpt", config, ckpt)
         # ckpt = "yang_model/bbox_mAP_epoch_70.pth"
-        ckpt = "yang_model/bbox_mAP_epoch_200.pth"
 
         model = init_detector(
                 config=config,
@@ -40,7 +40,9 @@ class WrappedYOLO(nn.Module):
             x = self.bbox_head(x)
 
         img_metas = [dict(ori_shape=(h, w), scale_factor=1, batch_input_shape=(h,w)) for _ in range(b)]
-        preds = self.bbox_head.predict_by_feat(x[0], x[1], x[2], img_metas,\
+        # preds = self.bbox_head.predict_by_feat(x[0], x[1], x[2], img_metas,\
+                # rescale=False, with_nms=True)
+        preds = self.bbox_head.predict_by_feat(*x, batch_img_metas=img_metas,\
                 rescale=False, with_nms=True)
 
         # get bboxes etc
