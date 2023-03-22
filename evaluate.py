@@ -5,7 +5,7 @@ from tqdm import tqdm
 from dataset.box_dataset import box_dataset
 
 from network import WrappedYOLO, WrappedDetector
-from network.batch_norm import set_bn_online 
+from network.online_batch_norm import set_bn_online 
 import argparse
 from torch import nn
 import numpy as np
