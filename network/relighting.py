@@ -4,7 +4,6 @@ import functools
 
 affine_par = True
 
-
 class ResnetBlock(nn.Module):
     """Define a Resnet block"""
 
@@ -64,14 +63,13 @@ class ResnetBlock(nn.Module):
         out = x + self.conv_block(x)  # add skip connections
         return out
 
-
 class ResnetGenerator(nn.Module):
     """Resnet-based generator that consists of Resnet blocks between a few downsampling/upsampling operations.
 
     We adapt Torch code and idea from Justin Johnson's neural style transfer project(https://github.com/jcjohnson/fast-neural-style)
     """
 
-    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6, padding_type='reflect'):
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6, padding_type='reflect', act='tanh'):
         """Construct a Resnet-based generator
 
         Parameters:
@@ -118,7 +116,10 @@ class ResnetGenerator(nn.Module):
                       nn.ReLU(True)]
         model += [nn.ReflectionPad2d(3)]
         model += [nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)]
-        model += [nn.Tanh()]
+        if act == 'tanh':
+            model += [nn.Tanh()]
+        else:
+            model += [nn.Sigmoid()]
 
         self.model = nn.Sequential(*model)
 
@@ -126,232 +127,9 @@ class ResnetGenerator(nn.Module):
         """Standard forward"""
         return self.model(input)
 
-class ResnetGeneratorHalf(nn.Module):
-    """Resnet-based generator that consists of Resnet blocks between a few downsampling/upsampling operations.
-
-    We adapt Torch code and idea from Justin Johnson's neural style transfer project(https://github.com/jcjohnson/fast-neural-style)
-    """
-
-    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6, padding_type='reflect'):
-        """Construct a Resnet-based generator
-
-        Parameters:
-            input_nc (int)      -- the number of channels in input images
-            output_nc (int)     -- the number of channels in output images
-            ngf (int)           -- the number of filters in the last conv layer
-            norm_layer          -- normalization layer
-            use_dropout (bool)  -- if use dropout layers
-            n_blocks (int)      -- the number of ResNet blocks
-            padding_type (str)  -- the name of padding layer in conv layers: reflect | replicate | zero
-        """
-        assert(n_blocks >= 0)
-        super(ResnetGeneratorHalf, self).__init__()
-        self.ngf = ngf
-        if type(norm_layer) == functools.partial:
-            use_bias = norm_layer.func == nn.InstanceNorm2d
-        else:
-            use_bias = norm_layer == nn.InstanceNorm2d
-
-        model = [nn.ReflectionPad2d(3),
-                 nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0, bias=use_bias),
-                 norm_layer(ngf),
-                 nn.ReLU(True)]
-
-        n_downsampling = 2
-        for i in range(n_downsampling):  # add downsampling layers
-            mult = 2 ** i
-            model += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1, bias=use_bias),
-                      norm_layer(ngf * mult * 2),
-                      nn.ReLU(True)]
-
-        mult = 2 ** n_downsampling
-        for i in range(n_blocks):       # add ResNet blocks
-
-            model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
-
-        l = 0
-
-        for i in range(n_downsampling):  # add upsampling layers
-            mult = 2 ** (n_downsampling - i)
-            model += [nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2),
-                                         kernel_size=3, stride=2,
-                                         padding=1, output_padding=1,
-                                         bias=use_bias),
-                      norm_layer(int(ngf * mult / 2)),
-                      nn.ReLU(True)]
-            l = int(ngf * mult / 2)
-            break # ignore last convtranspose2d
-        model += [nn.ReflectionPad2d(3)]
-        model += [nn.Conv2d(l, output_nc, kernel_size=7, padding=0)]
-        model += [nn.Tanh()]
-
-        self.model = nn.Sequential(*model)
-
-    def forward(self, input):
-        """Standard forward"""
-        o = self.model(input)
-
-        return nn.functional.upsample(o, input.shape[-2:])
-
-
-class GammaLightNet(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-
-        self.unet = ResnetGenerator(3, 1, 64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=3)
-
-    def forward(self, x):
-        o = self.unet(x)
-        # rgb = o[:, :3, :, :]
-        gamma = o[:, 0, :, :].unsqueeze(1)
-
-
-        gamma_correction = torch.pow(x, gamma)
-
-        return gamma_correction - x
-
-from torchvision.models import resnet34, ResNet34_Weights
-class ResNetColorCorrector(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-
-        self.resnet = resnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
-
-        resnet_out_dim = 1000
-
-        ff_dim = 256
-
-        self.contrast = nn.Sequential(
-            nn.Linear(resnet_out_dim, ff_dim),
-            nn.GELU(),
-            nn.Linear(ff_dim, ff_dim),
-            nn.GELU(),
-            nn.Linear(ff_dim, 3),
-            nn.Sigmoid()
-        )
-
-        self.brightness = nn.Sequential(
-            nn.Linear(resnet_out_dim, ff_dim),
-            nn.GELU(),
-            nn.Linear(ff_dim, ff_dim),
-            nn.GELU(),
-            nn.Linear(ff_dim, 3)
-        )
-
-    def forward(self, x):
-        image = x
-        b = image.shape[0]
-
-        x = self.resnet(x)
-        con = self.contrast(x)
-        br = self.brightness(x)
-
-        con = con.reshape(b, 3, 1, 1)
-        br = br.reshape(b, 3, 1, 1)
-
-        con = torch.clamp(con, 0.01)
-        adj_image = (image + br) * con
-
-        residual = adj_image - image 
-
-        return residual
-
-import torchvision
-class ResNetColorCorrector2(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-
-        # resnet = resnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
-
-        # self.resnet = nn.Sequential(
-        #     resnet.conv1,
-        #     resnet.bn1,
-        #     resnet.relu,
-        #     resnet.maxpool,
-        #     #
-        #     resnet.layer1,
-        #     resnet.layer2,
-        #     resnet.layer3,
-        #     resnet.layer4
-        #     # 
-        # )
-
-        self.resnet = ResnetGenerator(3, 32, 32, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=3)
-
-        # resnet.layer4.
-
-        l4_out_dim = 32
-
-        # ff_dim = 256
-
-        self.contrast = nn.Sequential(
-            # nn.Conv2d(l4_out_dim, l4_out_dim, 7, stride=1),
-            # nn.ReLU(),
-            # nn.Conv2d(l4_out_dim, l4_out_dim, 3, stride=1),
-            # nn.ReLU(),
-            nn.Conv2d(l4_out_dim, 3, 3, stride=1),
-            nn.Sigmoid()
-        )
-
-        self.brightness = nn.Sequential(
-            # nn.Conv2d(l4_out_dim, l4_out_dim, 7, stride=1),
-            # nn.ReLU(),
-            # nn.Conv2d(l4_out_dim, l4_out_dim, 3, stride=1),
-            # nn.ReLU(),
-            nn.Conv2d(l4_out_dim, 3, 3, stride=1),
-        )
-
-    def forward(self, x):
-        image = x
-        b = image.shape[0]
-
-        x = self.resnet(x)
-        con = self.contrast(x)
-        br = self.brightness(x)
-        con = nn.functional.upsample(con, size=tuple(image.shape[-2:]))
-        br = nn.functional.upsample(br, size=tuple(image.shape[-2:]))
-
-        con = torch.clamp(con, 0.01)
-        # con *= 2.0
-        adj_image = image * con + br
-
-        # residual = adj_image - image 
-
-        return adj_image
-
 def LightNet(ngf=64, n_blocks=3):
-    # model = ResnetGeneratorHalf(3, 3, 64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=3)
     model = ResnetGenerator(3, 3, ngf, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=n_blocks)
     return model
-
-class LightNetTransparent(nn.Module):
-    def __init__(self, ngf=64, n_blocks=3) -> None:
-        super().__init__()
-
-        self.n_blocks = n_blocks
-        self.ngf = ngf
-
-        self.generator = ResnetGenerator(3, 4, ngf=ngf, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=n_blocks)
-
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        x = self.generator(x)
-
-        x_rgb = x[:, :3, :, :]
-        x_a = x[:, -1, :, :].unsqueeze(1)
-
-        x_a = self.sigmoid(x_a)
-    
-        # x_a = x_a.repeat((1, 3, 1, 1))
-        return x_rgb, x_a
-
-# def LightNetTransparent(ngf=64, n_blocks=3):
-#     model = ResnetGenerator(3, 4, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=n_blocks)
-
-
-
-#     return model
 
 class L_grayscale(nn.Module):
     def __init__(self) -> None:
@@ -376,11 +154,11 @@ class L_grayscale(nn.Module):
 
 from .ciconv2d import CIConv2d
 class L_ColorInvarianceConv(nn.Module):
-    def __init__(self, invariant) -> None:
+    def __init__(self, invariant, scale=1.25) -> None:
         super().__init__()
 
         self.invariant = invariant
-        self.ci_conv = CIConv2d(invariant)
+        self.ci_conv = CIConv2d(invariant, scale=1.25)
         self.ci_conv.eval()
 
         self.loss = nn.L1Loss()
