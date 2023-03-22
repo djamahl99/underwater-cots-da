@@ -19,7 +19,6 @@ from network.discriminator import ResNet18Discriminator, YOLODiscriminator
 
 from network.relighting import GammaLightNet, L_ColorInvarianceConv, L_grayscale, Loss_bounds
 
-from network.deeprelight_networks import define_G, VGGLoss
 
 def lr_poly(base_lr, iter, max_iter, power):
     return base_lr * ((1 - float(iter) / max_iter) ** (power))
@@ -58,10 +57,7 @@ def main():
     discriminator = "fc" # yolo
     r_coeff = 1.0
 
-    if generator == "deeprelight":
-        lightnet = define_G(3, 3, 8, 'global') 
-    else:
-        lightnet = LightNet(ngf=32)
+    lightnet = LightNet(ngf=32)
     # saved_state_dict = torch.load("dannet_deeplab_light.pth")
     init_weights(lightnet)
 
