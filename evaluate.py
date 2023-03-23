@@ -58,7 +58,7 @@ if __name__ == "__main__":
         model.load_state_dict(sd)
 
     if args.online and not model_has_bn_stats:
-        add_kdomain(model, momentums=[0.3, 0.3])
+        add_kdomain(model, momentums=[0.3, 0.1])
     else:
         set_bn_online(model)
 
