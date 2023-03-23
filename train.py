@@ -28,7 +28,7 @@ def teacher_momentum(step_j: int):
     num_warmup_steps = 1000
     lowest_momentum = 0.6
     # highest_momentum = 0.99995
-    highest_momentum = 0.9995
+    highest_momentum = 0.99995
     
     if step_j < init_steps:
         return lowest_momentum

@@ -143,7 +143,7 @@ def evaluate(model: nn.Module, ds: box_dataset, enhancement: nn.Module=None, dev
 
     results_coco = preprocess_results_dict(ann_path, ds.size)
     img_ids = [x['id'] for x in results_coco['images']]
-    cat_id = results_coco['categories'][0]
+    cat_id = results_coco['categories'][0]['id']
 
     gt_anns, pred_anns = [], []
     ann_id = 0
@@ -176,9 +176,9 @@ def evaluate(model: nn.Module, ds: box_dataset, enhancement: nn.Module=None, dev
             if img_id.item() not in imgs_boxes:
                 continue
 
-            bboxes = imgs_boxes[img_id.item()]['bboxes']
+            gt_bboxes = imgs_boxes[img_id.item()]['bboxes']
 
-            for box in bboxes:
+            for box in gt_bboxes:
                 box, area = xyxy2xywha(torch.tensor(box))
                 
                 assert box[0::2].max() <= ds.size[1] and box[1::2].max() <= ds.size[0]

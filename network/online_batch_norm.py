@@ -19,7 +19,7 @@ def set_bn_online(model):
                 print(f"set {n} online!")
                 return
             
-def add_kdomain(model):
+def add_kdomain(model, momentums=[0.4, 0.01]):
     old = model.backbone.stem.bn
     v = BatchNormAdaptKDomain(old.num_features, device=torch.device("cuda")).to(old.running_var.device)
     v.running_var = old.running_var
@@ -29,7 +29,7 @@ def add_kdomain(model):
     v.affine = old.affine
     v.weight = old.weight
     v.bias = old.bias
-    v.momentums = [0.4, 0.01]
+    v.momentums = momentums
     v.eval()
     model.backbone.stem.bn = v
 

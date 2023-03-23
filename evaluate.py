@@ -5,7 +5,7 @@ from tqdm import tqdm
 from dataset.box_dataset import box_dataset
 
 from network import WrappedYOLO, WrappedDetector
-from network.online_batch_norm import set_bn_online 
+from network.online_batch_norm import set_bn_online, add_kdomain
 import argparse
 from torch import nn
 import numpy as np
@@ -42,19 +42,24 @@ if __name__ == "__main__":
     else:
         raise Exception("bad model")
 
+    model_has_bn_stats = True
     if args.ckpt is not None:
         sd = torch.load(args.ckpt)
 
         if "backbone.stem.bn.running_mean" not in sd: # model was online :(
             sd['backbone.stem.bn.running_mean'] = torch.zeros((model.backbone.stem.bn.num_features))
             sd['backbone.stem.bn.running_var'] = torch.ones((model.backbone.stem.bn.num_features))
+            model_has_bn_stats = False
 
             if not args.online:
-                print("model was set in online mode! Must be ran in online!")
+                print("model was set in online mode! Must be ran in online! (with --online True)")
+                exit()
 
         model.load_state_dict(sd)
 
-    if args.online:
+    if args.online and not model_has_bn_stats:
+        add_kdomain(model, momentums=[0.3, 0.3])
+    else:
         set_bn_online(model)
 
     model = model.to(torch.device("cuda"))
@@ -66,3 +71,6 @@ if __name__ == "__main__":
     results_per_metric = evaluate_files(gt_filename=gt_filename, pred_filename=pred_filename)
 
     print(results_per_metric)
+
+    for metric in results_per_metric.keys():
+        print(f"{metric}: {results_per_metric[metric]*100:.3f}%")
